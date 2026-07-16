@@ -71,6 +71,7 @@ export async function runAutomation(automation: AutomationRow, scheduledFor: Dat
     if (runError.code === "23505") return { skipped: true, reason: "ALREADY_RUN", automation_id: automation.id };
     throw new Error("AUTOMATION_RUN_CREATE_FAILED");
   }
+  if (!run) throw new Error("AUTOMATION_RUN_CREATE_FAILED");
 
   try {
     const [{ data: organization }, { data: profile }, { data: memories }, { data: historyRows }] = await Promise.all([
@@ -101,7 +102,7 @@ export async function runAutomation(automation: AutomationRow, scheduledFor: Dat
     let totalToolCalls = 0;
 
     for (let step = 0; step < MAX_AGENT_TOOL_STEPS; step += 1) {
-      const assistant = await completeAgent(history);
+      const assistant = await completeAgent(history, { includeAutomationTools: false });
       if (!assistant.tool_calls?.length) {
         finalText = assistant.content?.trim() || "The automation completed without a written result.";
         break;
@@ -163,7 +164,7 @@ export async function runAutomation(automation: AutomationRow, scheduledFor: Dat
       recordUsage({ organizationId: automation.organization_id, userId: automation.user_id, eventType: "automation_run", metadata: { automation_id: automation.id, automation_run_id: run.id, correlation_id: correlationId, trigger, approvals: approvalIds.length, tools: toolLog.length, provider: agentModelProvider(), model: agentModelName() } }),
       admin.from("audit_events").insert({ organization_id: automation.organization_id, actor_user_id: automation.user_id, source: "automation", tool_name: "run_automation", resource_type: "automation", operation: "execute", result: "success", metadata: { automation_id: automation.id, automation_run_id: run.id, correlation_id: correlationId, trigger, approval_count: approvalIds.length } }),
     ]);
-    return { completed: true, automation_id: automation.id, run_id: run.id, correlation_id: correlationId, approval_ids: approvalIds, message_id: message.id };
+    return { completed: true, automation_id: automation.id, run_id: run.id, correlation_id: correlationId, approval_ids: approvalIds, message_id: message.id, conversation_id: conversationId };
   } catch (error) {
     const code = safeErrorCode(error);
     const failures = Number(automation.consecutive_failures ?? 0) + 1;
@@ -175,7 +176,7 @@ export async function runAutomation(automation: AutomationRow, scheduledFor: Dat
       recordUsage({ organizationId: automation.organization_id, userId: automation.user_id, eventType: "automation_run_failed", metadata: { automation_id: automation.id, automation_run_id: run.id, correlation_id: correlationId, error_code: code, consecutive_failures: failures, paused } }),
       admin.from("audit_events").insert({ organization_id: automation.organization_id, actor_user_id: automation.user_id, source: "automation", tool_name: "run_automation", resource_type: "automation", operation: "execute", result: "failure", error_code: code, metadata: { automation_id: automation.id, automation_run_id: run.id, correlation_id: correlationId, trigger, consecutive_failures: failures, paused } }),
     ]);
-    return { completed: false, automation_id: automation.id, run_id: run.id, correlation_id: correlationId, error: code, paused };
+    return { completed: false, automation_id: automation.id, run_id: run.id, correlation_id: correlationId, error: code, paused, conversation_id: conversationId };
   }
 }
 
