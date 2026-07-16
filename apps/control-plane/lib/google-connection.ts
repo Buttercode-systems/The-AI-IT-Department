@@ -56,11 +56,29 @@ export async function getGoogleAccessToken(connection: Record<string, any>) {
   return merged.access_token;
 }
 
-export async function googleJson(accessToken: string, url: string) {
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${accessToken}` },
+export async function googleRequest(
+  accessToken: string,
+  url: string,
+  init: { method?: string; body?: unknown; headers?: Record<string, string> } = {},
+) {
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${accessToken}`,
+    ...(init.headers ?? {}),
+  };
+  const request: RequestInit = {
+    method: init.method ?? "GET",
+    headers,
     cache: "no-store",
-  });
+  };
+  if (init.body !== undefined) {
+    headers["content-type"] = headers["content-type"] ?? "application/json";
+    request.body = headers["content-type"] === "application/json" ? JSON.stringify(init.body) : String(init.body);
+  }
+  const response = await fetch(url, request);
   const body = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, body };
+}
+
+export async function googleJson(accessToken: string, url: string) {
+  return googleRequest(accessToken, url);
 }
