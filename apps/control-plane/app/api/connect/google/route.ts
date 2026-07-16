@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import { encryptSecret, sha256 } from "../../../../lib/crypto";
-import { createSupabaseAdminClient, createSupabaseServerClient } from "../../../../lib/server-supabase";
+import { createSupabaseAdminClient } from "../../../../lib/server-supabase";
 
 const GOOGLE_SCOPES = [
   "openid",
@@ -15,15 +15,29 @@ function base64url(buffer: Buffer) {
   return buffer.toString("base64url");
 }
 
-export async function GET(request: Request) {
+export async function POST(request: Request) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) return NextResponse.json({ error: "Google OAuth is not configured" }, { status: 503 });
+  if (!clientId) {
+    return NextResponse.json({ error: "Google OAuth is not configured" }, { status: 503 });
+  }
 
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.redirect(new URL("/?error=signin_required", request.url));
+  const authorization = request.headers.get("authorization");
+  const accessToken = authorization?.startsWith("Bearer ") ? authorization.slice(7) : null;
+  if (!accessToken) {
+    return NextResponse.json({ error: "Sign in is required" }, { status: 401 });
+  }
 
-  const { data: membership, error: membershipError } = await supabase
+  const admin = createSupabaseAdminClient();
+  const {
+    data: { user },
+    error: userError,
+  } = await admin.auth.getUser(accessToken);
+
+  if (userError || !user) {
+    return NextResponse.json({ error: "Your session has expired. Sign in again." }, { status: 401 });
+  }
+
+  const { data: membership, error: membershipError } = await admin
     .from("memberships")
     .select("organization_id")
     .eq("user_id", user.id)
@@ -31,7 +45,7 @@ export async function GET(request: Request) {
     .single();
 
   if (membershipError || !membership) {
-    return NextResponse.redirect(new URL("/?error=workspace_required", request.url));
+    return NextResponse.json({ error: "Create your workspace before connecting Google." }, { status: 409 });
   }
 
   const state = base64url(randomBytes(32));
@@ -40,7 +54,6 @@ export async function GET(request: Request) {
   const redirectUri = `${new URL(request.url).origin}/api/connect/google/callback`;
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  const admin = createSupabaseAdminClient();
   const { error } = await admin.from("oauth_states").insert({
     organization_id: membership.organization_id,
     user_id: user.id,
@@ -51,7 +64,10 @@ export async function GET(request: Request) {
     expires_at: expiresAt,
   });
 
-  if (error) return NextResponse.redirect(new URL("/?error=oauth_state_failed", request.url));
+  if (error) {
+    console.error("Failed to create OAuth state", error);
+    return NextResponse.json({ error: "Could not start Google connection." }, { status: 500 });
+  }
 
   const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authorizationUrl.searchParams.set("client_id", clientId);
@@ -65,5 +81,9 @@ export async function GET(request: Request) {
   authorizationUrl.searchParams.set("code_challenge", challenge);
   authorizationUrl.searchParams.set("code_challenge_method", "S256");
 
-  return NextResponse.redirect(authorizationUrl);
+  return NextResponse.json({ url: authorizationUrl.toString() });
+}
+
+export async function GET(request: Request) {
+  return NextResponse.redirect(new URL("/?error=use_connect_button", request.url));
 }
