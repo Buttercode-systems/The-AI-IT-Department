@@ -2,15 +2,18 @@ export const dynamic = "force-dynamic";
 
 // This endpoint exposes readiness booleans only; it never returns secrets.
 export async function GET() {
-  const modelProviderConfigured = Boolean(
-    process.env.AI_GATEWAY_API_KEY ||
-    process.env.VERCEL_OIDC_TOKEN ||
-    process.env.OPENAI_API_KEY,
-  );
+  const modelProvider = process.env.GROQ_API_KEY
+    ? "groq"
+    : process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN
+      ? "vercel-ai-gateway"
+      : process.env.OPENAI_API_KEY
+        ? "openai"
+        : null;
 
   return Response.json({
-    status: modelProviderConfigured ? "ready" : "degraded",
-    model_provider_configured: modelProviderConfigured,
+    status: modelProvider ? "ready" : "degraded",
+    model_provider_configured: Boolean(modelProvider),
+    model_provider: modelProvider,
     supabase_configured: Boolean(
       process.env.NEXT_PUBLIC_SUPABASE_URL &&
       (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) &&
