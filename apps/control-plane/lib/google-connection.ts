@@ -3,8 +3,8 @@ import { createSupabaseAdminClient } from "./server-supabase";
 
 type StoredTokens = {
   access_token: string;
-  refresh_token?: string;
-  token_type?: string;
+  refresh_token?: string | undefined;
+  token_type?: string | undefined;
 };
 
 export async function getGoogleConnection(organizationId: string) {
