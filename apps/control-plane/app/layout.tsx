@@ -1,6 +1,9 @@
 import "./styles.css";
 import "./approval.css";
+import "./legal.css";
+import "./manage.css";
 import ApprovalDock from "./approval-dock";
+import ManageLauncher from "./manage-launcher";
 
 export const metadata = {
   title: "AID — AI IT Department",
@@ -10,7 +13,7 @@ export const metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>{children}<ApprovalDock /></body>
+      <body>{children}<ManageLauncher /><ApprovalDock /></body>
     </html>
   );
 }
