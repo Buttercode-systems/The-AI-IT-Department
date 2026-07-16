@@ -108,7 +108,7 @@ export default function HomePage() {
         api<{ conversations: Conversation[] }>("/api/conversations", "GET"),
       ]);
       setStatus(live); setProfile(onboarding.profile); hydrateProfile(onboarding.profile); setConversations(threads.conversations);
-      if (threads.conversations[0]) await openConversation(threads.conversations[0].id);
+      setActiveConversationId(null); setMessages([]); setView("chat");
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not load your workspace."); }
   }
 
