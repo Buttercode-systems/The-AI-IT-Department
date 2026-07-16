@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
@@ -13,6 +13,12 @@ function env() {
   return { url, anonKey, serviceRoleKey };
 }
 
+type CookieToSet = {
+  name: string;
+  value: string;
+  options: CookieOptions;
+};
+
 export async function createSupabaseServerClient() {
   const cookieStore = await cookies();
   const { url, anonKey } = env();
@@ -20,7 +26,7 @@ export async function createSupabaseServerClient() {
   return createServerClient(url, anonKey, {
     cookies: {
       getAll: () => cookieStore.getAll(),
-      setAll: (values) => {
+      setAll: (values: CookieToSet[]) => {
         for (const { name, value, options } of values) cookieStore.set(name, value, options);
       },
     },
