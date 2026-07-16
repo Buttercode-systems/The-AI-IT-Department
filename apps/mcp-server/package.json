@@ -15,6 +15,7 @@
   "dependencies": {
     "@ai-it/contracts": "file:../../packages/contracts",
     "@modelcontextprotocol/sdk": "^1.17.0",
+    "@supabase/supabase-js": "^2.57.4",
     "express": "^5.1.0",
     "zod": "^3.25.76"
   },

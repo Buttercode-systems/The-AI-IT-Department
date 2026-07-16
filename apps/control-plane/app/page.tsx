@@ -23,8 +23,9 @@ type BriefingItem = {
   due_at?: string;
   state: "open" | "done" | "dismissed" | "snoozed";
 };
+type AuditEvent = { id: string; source: string; tool_name?: string; provider?: string; resource_type?: string; operation: string; result: string; created_at: string };
 type AuthMode = "signin" | "signup";
-type View = "home" | "actions" | "connections";
+type View = "home" | "actions" | "connections" | "activity";
 
 export default function HomePage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
@@ -37,6 +38,7 @@ export default function HomePage() {
   const [status, setStatus] = useState<LiveStatus>({ connection: null, latestTest: null, capability: null });
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [items, setItems] = useState<BriefingItem[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [businessName, setBusinessName] = useState("");
@@ -62,6 +64,7 @@ export default function HomePage() {
   }, [supabase]);
 
   useEffect(() => { if (user) void loadWorkspace(); }, [user]);
+  useEffect(() => { if (user && view === "activity") void loadAudit(); }, [user, view]);
 
   async function token() {
     const { data } = await supabase.auth.getSession();
@@ -70,11 +73,12 @@ export default function HomePage() {
   }
 
   async function api(path: string, method: "GET" | "POST" = "POST", body?: unknown) {
-    const response = await fetch(path, {
-      method,
-      headers: { authorization: `Bearer ${await token()}`, ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    const init: RequestInit = { method, headers: { authorization: `Bearer ${await token()}` } };
+    if (body !== undefined) {
+      init.headers = { ...init.headers, "content-type": "application/json" };
+      init.body = JSON.stringify(body);
+    }
+    const response = await fetch(path, init);
     const result = await response.json();
     if (!response.ok) throw new Error((result as { error?: string }).error?.replaceAll("_", " ") ?? "Request failed");
     return result;
@@ -96,6 +100,18 @@ export default function HomePage() {
       setItems(latest.items);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not load workspace.");
+    }
+  }
+
+  async function loadAudit() {
+    setBusy("audit");
+    try {
+      const result = await api("/api/audit", "GET") as { events: AuditEvent[] };
+      setAuditEvents(result.events);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not load activity.");
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -186,9 +202,27 @@ export default function HomePage() {
     finally { setBusy(null); }
   }
 
+  async function deleteAccount() {
+    const first = window.confirm("Delete this workspace, all briefings, action history, stored credentials, and your account? This cannot be undone.");
+    if (!first) return;
+    const typed = window.prompt("Type DELETE to permanently remove everything.");
+    if (typed !== "DELETE") return setMessage("Account deletion cancelled.");
+    setBusy("delete-account");
+    try {
+      await api("/api/account/delete");
+      await supabase.auth.signOut();
+      setWorkspace(null); setBriefing(null); setItems([]); setAuditEvents([]); setUser(null); setView("home");
+      setMessage("Your account and workspace were deleted.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Account deletion failed.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
-    setWorkspace(null); setBriefing(null); setItems([]); setStatus({ connection: null, latestTest: null, capability: null });
+    setWorkspace(null); setBriefing(null); setItems([]); setAuditEvents([]); setStatus({ connection: null, latestTest: null, capability: null });
   }
 
   const connected = status.connection?.status === "connected" || status.connection?.status === "error";
@@ -196,6 +230,7 @@ export default function HomePage() {
   const capabilityActive = status.capability?.status === "active";
   const openItems = items.filter((item) => item.state === "open" || item.state === "snoozed");
   const visibleItems = view === "actions" ? openItems : openItems.slice(0, 8);
+  const title = view === "connections" ? "Connections" : view === "actions" ? "Action queue" : view === "activity" ? "Activity" : "Good afternoon";
 
   if (!authReady) return <main className="loading">Loading…</main>;
 
@@ -207,6 +242,7 @@ export default function HomePage() {
           <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>Today</button>
           <button className={view === "actions" ? "active" : ""} onClick={() => requireAuth(() => setView("actions"))}>Action queue</button>
           <button className={view === "connections" ? "active" : ""} onClick={() => requireAuth(() => setView("connections"))}>Connections</button>
+          <button className={view === "activity" ? "active" : ""} onClick={() => requireAuth(() => setView("activity"))}>Activity</button>
         </nav>
         <div className="sidebar-footer">
           {user ? <><div className="user-chip"><span>{user.email?.slice(0, 1).toUpperCase()}</span><small>{user.email}</small></div><button className="text-button" onClick={signOut}>Sign out</button></> : <button className="compact primary" onClick={() => setShowAuth(true)}>Sign in</button>}
@@ -215,8 +251,8 @@ export default function HomePage() {
 
       <section className="workspace">
         <header className="topbar">
-          <div><p className="kicker">THE AI IT DEPARTMENT</p><h1>{view === "connections" ? "Connections" : view === "actions" ? "Action queue" : "Good afternoon"}</h1></div>
-          <button className="compact" onClick={() => requireAuth(() => void generateBriefing())} disabled={busy === "briefing"}>{busy === "briefing" ? "Refreshing…" : "Refresh briefing"}</button>
+          <div><p className="kicker">THE AI IT DEPARTMENT</p><h1>{title}</h1></div>
+          {view !== "activity" && view !== "connections" && <button className="compact" onClick={() => requireAuth(() => void generateBriefing())} disabled={busy === "briefing"}>{busy === "briefing" ? "Refreshing…" : "Refresh briefing"}</button>}
         </header>
 
         {!user && <section className="welcome-card">
@@ -229,9 +265,16 @@ export default function HomePage() {
           <article className="setting-card"><div><h3>Google Workspace</h3><p>{connected ? status.connection?.provider_account_label : "Connect Gmail and Calendar with read-only access."}</p></div>{connected ? <button className="compact danger" onClick={disconnect} disabled={busy === "disconnect"}>Disconnect</button> : <button className="compact primary" onClick={connectGoogle} disabled={!workspace?.profile_complete || busy === "connect"}>Connect Google</button>}</article>
           <article className="setting-card"><div><h3>Connection health</h3><p>{checksPassed ? "Gmail and Calendar checks passed." : "Run a live permission and API test."}</p></div><button className="compact" onClick={runChecks} disabled={!connected || busy === "checks"}>{busy === "checks" ? "Checking…" : "Run checks"}</button></article>
           <article className="setting-card"><div><h3>Daily briefing</h3><p>{capabilityActive ? "Active and ready to generate." : "Activate after connection checks pass."}</p></div><button className="compact primary" onClick={activate} disabled={!checksPassed || busy === "activate"}>{capabilityActive ? "Generate now" : "Activate"}</button></article>
+          <article className="setting-card danger-zone"><div><h3>Delete account and workspace</h3><p>Permanently removes stored credentials, briefings, actions, audit data, workspace data, and your sign-in account.</p></div><button className="compact danger" onClick={deleteAccount} disabled={busy === "delete-account"}>{busy === "delete-account" ? "Deleting…" : "Delete everything"}</button></article>
         </section>}
 
-        {user && view !== "connections" && <>
+        {user && view === "activity" && <section className="activity-list">
+          {busy === "audit" && !auditEvents.length && <div className="empty-state"><p>Loading activity…</p></div>}
+          {auditEvents.map((event) => <article className="activity-item" key={event.id}><div><strong>{event.operation.replaceAll("_", " ")}</strong><span>{event.tool_name?.replaceAll("_", " ") || event.resource_type || event.source}</span></div><div><span className={`result ${event.result}`}>{event.result}</span><time>{new Date(event.created_at).toLocaleString()}</time></div></article>)}
+          {!busy && !auditEvents.length && <div className="empty-state"><h3>No activity yet</h3><p>Connection, briefing, action, and security events will appear here.</p></div>}
+        </section>}
+
+        {user && view !== "connections" && view !== "activity" && <>
           <section className="briefing-head">
             <div><p className="kicker">TODAY&apos;S BRIEFING</p><h2>{briefing ? briefing.summary : capabilityActive ? "Generate your first briefing" : "Finish connecting your workspace"}</h2>{briefing && <p>Updated {new Date(briefing.generated_at).toLocaleString()}</p>}</div>
             {!briefing && <button className="compact primary" onClick={() => capabilityActive ? void generateBriefing() : setView("connections")}>{capabilityActive ? "Generate briefing" : "Complete setup"}</button>}
