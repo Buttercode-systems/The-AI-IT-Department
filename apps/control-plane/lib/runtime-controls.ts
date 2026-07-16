@@ -40,7 +40,7 @@ export async function recordUsage(input: {
 }
 
 export async function finishRun(input: {
-  runId: string;
+  runId: string | null;
   correlationId: string;
   startedAt: number;
   status: "completed" | "awaiting_approval" | "failed";
@@ -48,6 +48,7 @@ export async function finishRun(input: {
   toolCalls?: Array<Record<string, unknown>>;
   errorCode?: string | null;
 }) {
+  if (!input.runId) return;
   const admin = createSupabaseAdminClient();
   await admin.from("agent_runs").update({
     status: input.status,
