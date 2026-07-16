@@ -116,9 +116,7 @@ function createServer(): McpServer {
 
 app.post("/mcp", async (request, response) => {
   const server = createServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
+  const transport = new StreamableHTTPServerTransport({});
 
   response.on("close", () => {
     void transport.close();
@@ -126,7 +124,7 @@ app.post("/mcp", async (request, response) => {
   });
 
   try {
-    await server.connect(transport);
+    await server.connect(transport as unknown as Parameters<typeof server.connect>[0]);
     await transport.handleRequest(request, response, request.body);
   } catch (error) {
     console.error("MCP request failed", error);
