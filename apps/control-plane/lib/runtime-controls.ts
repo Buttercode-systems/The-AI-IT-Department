@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createSupabaseAdminClient } from "./server-supabase";
+export { safeErrorCode } from "./runtime-policy";
 
 export type RuntimeContext = {
   correlationId: string;
@@ -56,23 +57,4 @@ export async function finishRun(input: {
     duration_ms: Math.max(Date.now() - input.startedAt, 0),
     completed_at: new Date().toISOString(),
   }).eq("id", input.runId).eq("correlation_id", input.correlationId);
-}
-
-export function safeErrorCode(error: unknown) {
-  const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
-  const known = new Set([
-    "MODEL_PROVIDER_NOT_CONFIGURED",
-    "MODEL_TIMEOUT",
-    "MODEL_RATE_LIMITED",
-    "MODEL_REQUEST_FAILED",
-    "MODEL_EMPTY_RESPONSE",
-    "GOOGLE_NOT_CONNECTED",
-    "GOOGLE_RECONNECT_REQUIRED",
-    "RATE_LIMIT_CHECK_FAILED",
-    "RATE_LIMIT_EXCEEDED",
-    "AGENT_RUN_CREATE_FAILED",
-    "MESSAGE_SAVE_FAILED",
-    "ASSISTANT_MESSAGE_SAVE_FAILED",
-  ]);
-  return known.has(message) ? message : "AGENT_FAILED";
 }
