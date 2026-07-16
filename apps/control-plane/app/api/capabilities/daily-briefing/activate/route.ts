@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { getUserOrganization, requireBearerUser } from "../../../../../../lib/api-auth";
-import { getGoogleAccessToken, getGoogleConnection, googleJson } from "../../../../../../lib/google-connection";
-import { createSupabaseAdminClient } from "../../../../../../lib/server-supabase";
+import { getUserOrganization, requireBearerUser } from "../../../../../lib/api-auth";
+import { getGoogleAccessToken, getGoogleConnection, googleJson } from "../../../../../lib/google-connection";
+import { createSupabaseAdminClient } from "../../../../../lib/server-supabase";
 
 export async function POST(request: Request) {
   try {
