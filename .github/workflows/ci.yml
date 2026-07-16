@@ -11,17 +11,44 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10.13.1
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --no-frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
+          node-version: 24
+      - run: npm install --silent
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        shell: bash
+        run: npm run typecheck > typecheck.log 2>&1
+      - name: Upload typecheck diagnostics
+        if: steps.typecheck.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-diagnostics
+          path: typecheck.log
+      - name: Fail on typecheck error
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
+      - name: Test
+        shell: bash
+        run: set -o pipefail; npm run test 2>&1 | tail -120
+      - name: Build
+        id: build
+        continue-on-error: true
+        shell: bash
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://amcjrmhmrentzgxyohlm.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_otK-GHV9du5xWWodgCAP9Q_xrgfU_vs
+        run: npm run build > build.log 2>&1
+      - name: Upload build diagnostics
+        if: steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: build.log
+      - name: Fail on build error
+        if: steps.build.outcome == 'failure'
+        run: exit 1

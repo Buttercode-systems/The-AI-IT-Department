@@ -1,58 +1,59 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { createSupabaseBrowserClient } from "../lib/supabase";
 
 type Workspace = { organization_id: string; organization_name: string; profile_complete: boolean };
-type LiveStatus = {
-  connection: { status: string; provider_account_label?: string } | null;
-  latestTest: { status: string } | null;
-  capability: { status: string } | null;
-};
-type Briefing = { id: string; summary: string; generated_at: string; source_counts: { email?: number; calendar?: number } };
-type BriefingItem = {
-  id: string;
-  item_type: "email" | "calendar" | "action";
-  priority: "urgent" | "high" | "normal" | "low";
-  title: string;
-  summary: string;
-  reason: string;
-  source_label?: string;
-  source_url?: string;
-  due_at?: string;
-  state: "open" | "done" | "dismissed" | "snoozed";
-};
+type Conversation = { id: string; title: string; created_at: string; updated_at: string };
+type ChatMessage = { id: string; role: "user" | "assistant" | "tool" | "system"; content: string; tool_name?: string; created_at: string };
+type LiveStatus = { connection: { status: string; provider_account_label?: string } | null; latestTest: { status: string } | null; capability: { status: string } | null };
+type Profile = { business_type?: string; user_role?: string; timezone?: string; communication_style?: string; operating_context?: Record<string, string | null>; onboarding_completed_at?: string | null };
+type View = "chat" | "settings";
 type AuthMode = "signin" | "signup";
-type View = "home" | "actions" | "connections";
+
+const starters = [
+  "Show me customer emails I have not replied to",
+  "What is on my calendar tomorrow?",
+  "Find urgent messages from the last seven days",
+  "Prepare my daily business briefing",
+];
 
 export default function HomePage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
+  const bottomRef = useRef<HTMLDivElement>(null);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>("chat");
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [status, setStatus] = useState<LiveStatus>({ connection: null, latestTest: null, capability: null });
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
-  const [items, setItems] = useState<BriefingItem[]>([]);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [businessName, setBusinessName] = useState("");
-  const [message, setMessage] = useState("");
+  const [businessType, setBusinessType] = useState("");
+  const [userRole, setUserRole] = useState("");
+  const [timezone, setTimezone] = useState("Africa/Johannesburg");
+  const [communicationStyle, setCommunicationStyle] = useState("clear and professional");
+  const [typicalCustomers, setTypicalCustomers] = useState("");
+  const [workingHours, setWorkingHours] = useState("");
+  const [importantRules, setImportantRules] = useState("");
+  const [notice, setNotice] = useState("");
+  const [runStatus, setRunStatus] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("connected") === "google") setMessage("Google connected. Run a secure connection check next.");
-    if (params.get("error")) setMessage(`Connection error: ${params.get("error")?.replaceAll("_", " ")}`);
+    if (params.get("connected") === "google") setNotice("Google Workspace connected successfully.");
+    if (params.get("error")) setNotice(`Connection error: ${params.get("error")?.replaceAll("_", " ")}`);
     if (params.size) window.history.replaceState({}, "", window.location.pathname);
-
-    void supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null);
-      setAuthReady(true);
-    });
+    void supabase.auth.getSession().then(({ data }) => { setUser(data.session?.user ?? null); setAuthReady(true); });
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       setAuthReady(true);
@@ -61,196 +62,211 @@ export default function HomePage() {
     return () => data.subscription.unsubscribe();
   }, [supabase]);
 
-  useEffect(() => { if (user) void loadWorkspace(); }, [user]);
+  useEffect(() => { if (user) void bootstrap(); else resetPrivateState(); }, [user]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, runStatus]);
 
-  async function token() {
+  function resetPrivateState() {
+    setWorkspace(null); setConversations([]); setActiveConversationId(null); setMessages([]); setProfile(null);
+    setStatus({ connection: null, latestTest: null, capability: null });
+  }
+
+  async function accessToken() {
     const { data } = await supabase.auth.getSession();
     if (!data.session?.access_token) throw new Error("Sign in to continue.");
     return data.session.access_token;
   }
 
-  async function api(path: string, method: "GET" | "POST" = "POST", body?: unknown) {
-    const response = await fetch(path, {
-      method,
-      headers: { authorization: `Bearer ${await token()}`, ...(body ? { "content-type": "application/json" } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error((result as { error?: string }).error?.replaceAll("_", " ") ?? "Request failed");
+  async function api<T>(path: string, method: "GET" | "POST" = "POST", body?: unknown): Promise<T> {
+    const headers: Record<string, string> = { authorization: `Bearer ${await accessToken()}` };
+    const init: RequestInit = { method, headers };
+    if (body !== undefined) { headers["content-type"] = "application/json"; init.body = JSON.stringify(body); }
+    const response = await fetch(path, init);
+    const result = await response.json() as T & { error?: string };
+    if (!response.ok) throw new Error(result.error?.replaceAll("_", " ") || "Request failed");
     return result;
   }
 
-  async function loadWorkspace() {
+  async function bootstrap() {
     const { data, error } = await supabase.rpc("get_or_create_workspace", { requested_name: null });
-    if (error) return setMessage(error.message);
+    if (error) return setNotice(error.message);
     const next = (Array.isArray(data) ? data[0] : data) as Workspace;
-    setWorkspace(next);
-    setBusinessName(next?.organization_name ?? "");
+    setWorkspace(next); setBusinessName(next.organization_name);
     try {
-      const [live, latest] = await Promise.all([
-        api("/api/workspace/status", "GET") as Promise<LiveStatus>,
-        api("/api/briefings/latest", "GET") as Promise<{ briefing: Briefing | null; items: BriefingItem[] }>,
+      const [live, onboarding, threadResult] = await Promise.all([
+        api<LiveStatus>("/api/workspace/status", "GET"),
+        api<{ profile: Profile }>("/api/onboarding", "GET"),
+        api<{ conversations: Conversation[] }>("/api/conversations", "GET"),
       ]);
-      setStatus(live);
-      setBriefing(latest.briefing);
-      setItems(latest.items);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Could not load workspace.");
-    }
+      setStatus(live); setProfile(onboarding.profile); hydrateProfile(onboarding.profile); setConversations(threadResult.conversations);
+      if (threadResult.conversations[0]) await openConversation(threadResult.conversations[0].id);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not load your workspace."); }
   }
 
-  function requireAuth(action?: () => void) {
-    if (!user) {
-      setShowAuth(true);
-      setMessage("Sign in to use this feature.");
-      return;
-    }
-    action?.();
+  function hydrateProfile(next: Profile) {
+    setBusinessType(next.business_type ?? ""); setUserRole(next.user_role ?? ""); setTimezone(next.timezone ?? "Africa/Johannesburg");
+    setCommunicationStyle(next.communication_style ?? "clear and professional");
+    setTypicalCustomers(next.operating_context?.typical_customers ?? ""); setWorkingHours(next.operating_context?.working_hours ?? ""); setImportantRules(next.operating_context?.important_rules ?? "");
+  }
+
+  async function openConversation(id: string) {
+    setBusy("thread"); setActiveConversationId(id); setView("chat");
+    try {
+      const result = await api<{ messages: ChatMessage[] }>(`/api/conversations/${id}/messages`, "GET");
+      setMessages(result.messages.filter((item) => item.role !== "tool"));
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not open conversation."); }
+    finally { setBusy(null); }
+  }
+
+  async function newConversation() {
+    if (!user) return setShowAuth(true);
+    const result = await api<{ conversation: Conversation }>("/api/conversations", "POST", {});
+    setConversations((current) => [result.conversation, ...current]);
+    setActiveConversationId(result.conversation.id); setMessages([]); setView("chat");
+  }
+
+  async function sendMessage(text = draft) {
+    const clean = text.trim();
+    if (!clean) return;
+    if (!user) { setDraft(clean); setShowAuth(true); return; }
+    setBusy("chat"); setRunStatus("Starting…"); setDraft("");
+    try {
+      let conversationId = activeConversationId;
+      if (!conversationId) {
+        const created = await api<{ conversation: Conversation }>("/api/conversations", "POST", {});
+        conversationId = created.conversation.id; setActiveConversationId(conversationId); setConversations((current) => [created.conversation, ...current]);
+      }
+      const response = await fetch(`/api/conversations/${conversationId}/chat`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${await accessToken()}`, "content-type": "application/json" },
+        body: JSON.stringify({ message: clean }),
+      });
+      if (!response.ok || !response.body) throw new Error("The assistant could not start this request.");
+      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read(); if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const payload = JSON.parse(line) as { type: string; data: any };
+          if (payload.type === "user_message") setMessages((current) => [...current, payload.data as ChatMessage]);
+          if (payload.type === "status") setRunStatus(payload.data.message);
+          if (payload.type === "tool_start") setRunStatus(`Using ${String(payload.data.name).replaceAll("_", " ")}…`);
+          if (payload.type === "assistant_message") setMessages((current) => [...current, payload.data as ChatMessage]);
+          if (payload.type === "error") throw new Error(String(payload.data.message).replaceAll("_", " "));
+        }
+      }
+      const threads = await api<{ conversations: Conversation[] }>("/api/conversations", "GET"); setConversations(threads.conversations);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Assistant request failed."); setDraft(clean); }
+    finally { setBusy(null); setRunStatus(""); }
+  }
+
+  function composerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
   }
 
   async function continueWithGoogle() {
     setBusy("google-auth");
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: window.location.origin, queryParams: { prompt: "select_account" } },
-    });
-    if (error) { setBusy(null); setMessage(error.message); }
+    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin, queryParams: { prompt: "select_account" } } });
+    if (error) { setBusy(null); setNotice(error.message); }
   }
 
   async function authenticate(event: FormEvent) {
-    event.preventDefault();
-    setBusy("auth");
-    setMessage("");
+    event.preventDefault(); setBusy("auth"); setNotice("");
     const result = authMode === "signup"
       ? await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } })
       : await supabase.auth.signInWithPassword({ email, password });
     setBusy(null);
-    if (result.error) setMessage(result.error.message);
-    else if (authMode === "signup" && !result.data.session) setMessage("Account created. Confirm your email once, then return here.");
+    if (result.error) setNotice(result.error.message);
+    else if (authMode === "signup" && !result.data.session) setNotice("Account created. Confirm your email once, then return here.");
   }
 
   async function saveWorkspace(event: FormEvent) {
-    event.preventDefault();
-    setBusy("workspace");
+    event.preventDefault(); setBusy("workspace");
     const { error } = await supabase.rpc("get_or_create_workspace", { requested_name: businessName });
-    setBusy(null);
-    if (error) setMessage(error.message); else { setMessage("Workspace saved."); await loadWorkspace(); }
+    setBusy(null); if (error) setNotice(error.message); else { setNotice("Workspace saved."); await bootstrap(); }
+  }
+
+  async function saveOnboarding(event: FormEvent) {
+    event.preventDefault(); setBusy("onboarding");
+    try {
+      const result = await api<{ profile: Profile }>("/api/onboarding", "POST", { business_type: businessType, user_role: userRole, timezone, communication_style: communicationStyle, typical_customers: typicalCustomers, working_hours: workingHours, important_rules: importantRules });
+      setProfile(result.profile); setNotice("Business context saved. Your assistant will use it in future conversations.");
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not save onboarding."); }
+    finally { setBusy(null); }
   }
 
   async function connectGoogle() {
     setBusy("connect");
-    try {
-      const result = await api("/api/connect/google") as { url: string };
-      window.location.assign(result.url);
-    } catch (error) { setBusy(null); setMessage(error instanceof Error ? error.message : "Could not connect Google."); }
+    try { const result = await api<{ url: string }>("/api/connect/google"); window.location.assign(result.url); }
+    catch (error) { setBusy(null); setNotice(error instanceof Error ? error.message : "Could not connect Google."); }
   }
 
   async function runChecks() {
     setBusy("checks");
-    try { await api("/api/connections/google/check"); await loadWorkspace(); setMessage("Gmail and Calendar access verified."); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Checks failed."); }
+    try { await api("/api/connections/google/check"); setNotice("Gmail and Calendar access verified."); await bootstrap(); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Checks failed."); }
     finally { setBusy(null); }
-  }
-
-  async function activate() {
-    setBusy("activate");
-    try { await api("/api/capabilities/daily-briefing/activate"); await generateBriefing(); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Activation failed."); setBusy(null); }
-  }
-
-  async function generateBriefing() {
-    setBusy("briefing");
-    setMessage("Reading recent Gmail and Calendar activity…");
-    try {
-      const result = await api("/api/briefings/generate") as { briefing: Briefing; items: BriefingItem[] };
-      setBriefing(result.briefing);
-      setItems(result.items);
-      setView("home");
-      setMessage("Your briefing is ready.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Briefing failed."); }
-    finally { setBusy(null); }
-  }
-
-  async function updateItem(id: string, state: BriefingItem["state"]) {
-    try {
-      const result = await api(`/api/briefing-items/${id}`, "POST", { state }) as { item: BriefingItem };
-      setItems((current) => current.map((item) => item.id === id ? result.item : item));
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Could not update item."); }
   }
 
   async function disconnect() {
     if (!window.confirm("Disconnect Google and remove its stored credentials?")) return;
     setBusy("disconnect");
-    try { await api("/api/connections/google/disconnect"); setBriefing(null); setItems([]); await loadWorkspace(); setMessage("Google disconnected."); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Disconnect failed."); }
+    try { await api("/api/connections/google/disconnect"); setNotice("Google disconnected."); await bootstrap(); }
+    catch (error) { setNotice(error instanceof Error ? error.message : "Disconnect failed."); }
     finally { setBusy(null); }
   }
 
-  async function signOut() {
-    await supabase.auth.signOut();
-    setWorkspace(null); setBriefing(null); setItems([]); setStatus({ connection: null, latestTest: null, capability: null });
-  }
+  async function signOut() { await supabase.auth.signOut(); setView("chat"); }
 
   const connected = status.connection?.status === "connected" || status.connection?.status === "error";
   const checksPassed = status.latestTest?.status === "passed";
-  const capabilityActive = status.capability?.status === "active";
-  const openItems = items.filter((item) => item.state === "open" || item.state === "snoozed");
-  const visibleItems = view === "actions" ? openItems : openItems.slice(0, 8);
+  const activeConversation = conversations.find((item) => item.id === activeConversationId);
+  const assistantWelcome = connected
+    ? `Welcome${workspace?.organization_name ? ` to ${workspace.organization_name}` : ""}. Your Google Workspace is connected. I can search Gmail, inspect your calendar, find priority work, and help you plan what to do next.`
+    : "I can help run your day-to-day business work. Connect Google Workspace when you are ready to use Gmail and Calendar.";
 
   if (!authReady) return <main className="loading">Loading…</main>;
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <button className="brand" onClick={() => setView("home")}><span>AI</span><strong>IT Department</strong></button>
-        <nav>
-          <button className={view === "home" ? "active" : ""} onClick={() => setView("home")}>Today</button>
-          <button className={view === "actions" ? "active" : ""} onClick={() => requireAuth(() => setView("actions"))}>Action queue</button>
-          <button className={view === "connections" ? "active" : ""} onClick={() => requireAuth(() => setView("connections"))}>Connections</button>
-        </nav>
-        <div className="sidebar-footer">
-          {user ? <><div className="user-chip"><span>{user.email?.slice(0, 1).toUpperCase()}</span><small>{user.email}</small></div><button className="text-button" onClick={signOut}>Sign out</button></> : <button className="compact primary" onClick={() => setShowAuth(true)}>Sign in</button>}
+    <main className="chat-app">
+      <aside className="chat-sidebar">
+        <div className="sidebar-top"><button className="wordmark" onClick={() => setView("chat")}><span>AI</span><strong>IT Department</strong></button><button className="icon-button" title="New conversation" onClick={() => void newConversation()}>＋</button></div>
+        <button className="new-chat" onClick={() => void newConversation()}>＋ New conversation</button>
+        <div className="thread-list">
+          {user && conversations.map((item) => <button key={item.id} className={item.id === activeConversationId && view === "chat" ? "active" : ""} onClick={() => void openConversation(item.id)}><span>{item.title}</span></button>)}
+          {!user && <p className="sidebar-hint">Your conversations will appear here after you sign in.</p>}
+        </div>
+        <div className="sidebar-bottom">
+          {user ? <><button className={view === "settings" ? "active settings-link" : "settings-link"} onClick={() => setView("settings")}>Settings & connections</button><div className="account-row"><span>{user.email?.slice(0, 1).toUpperCase()}</span><small>{user.email}</small></div><button className="plain-link" onClick={() => void signOut()}>Sign out</button></> : <button className="sign-in-link" onClick={() => setShowAuth(true)}>Sign in</button>}
         </div>
       </aside>
 
-      <section className="workspace">
-        <header className="topbar">
-          <div><p className="kicker">THE AI IT DEPARTMENT</p><h1>{view === "connections" ? "Connections" : view === "actions" ? "Action queue" : "Good afternoon"}</h1></div>
-          <button className="compact" onClick={() => requireAuth(() => void generateBriefing())} disabled={busy === "briefing"}>{busy === "briefing" ? "Refreshing…" : "Refresh briefing"}</button>
-        </header>
-
-        {!user && <section className="welcome-card">
-          <div><p className="kicker">YOUR BUSINESS, READY FOR AI</p><h2>Turn Gmail and Calendar into a clear daily action plan.</h2><p>See what needs attention, what is coming up, and where to act next. Explore first; sign in only when you connect an account or generate a briefing.</p></div>
-          <button className="compact primary" onClick={() => setShowAuth(true)}>Create your workspace</button>
-        </section>}
-
-        {user && view === "connections" && <section className="settings-grid">
-          <form className="setting-card" onSubmit={saveWorkspace}><div><h3>Workspace</h3><p>Name the private workspace for your business.</p></div><input value={businessName} minLength={2} required onChange={(e) => setBusinessName(e.target.value)} /><button className="compact" disabled={busy === "workspace"}>Save</button></form>
-          <article className="setting-card"><div><h3>Google Workspace</h3><p>{connected ? status.connection?.provider_account_label : "Connect Gmail and Calendar with read-only access."}</p></div>{connected ? <button className="compact danger" onClick={disconnect} disabled={busy === "disconnect"}>Disconnect</button> : <button className="compact primary" onClick={connectGoogle} disabled={!workspace?.profile_complete || busy === "connect"}>Connect Google</button>}</article>
-          <article className="setting-card"><div><h3>Connection health</h3><p>{checksPassed ? "Gmail and Calendar checks passed." : "Run a live permission and API test."}</p></div><button className="compact" onClick={runChecks} disabled={!connected || busy === "checks"}>{busy === "checks" ? "Checking…" : "Run checks"}</button></article>
-          <article className="setting-card"><div><h3>Daily briefing</h3><p>{capabilityActive ? "Active and ready to generate." : "Activate after connection checks pass."}</p></div><button className="compact primary" onClick={activate} disabled={!checksPassed || busy === "activate"}>{capabilityActive ? "Generate now" : "Activate"}</button></article>
-        </section>}
-
-        {user && view !== "connections" && <>
-          <section className="briefing-head">
-            <div><p className="kicker">TODAY&apos;S BRIEFING</p><h2>{briefing ? briefing.summary : capabilityActive ? "Generate your first briefing" : "Finish connecting your workspace"}</h2>{briefing && <p>Updated {new Date(briefing.generated_at).toLocaleString()}</p>}</div>
-            {!briefing && <button className="compact primary" onClick={() => capabilityActive ? void generateBriefing() : setView("connections")}>{capabilityActive ? "Generate briefing" : "Complete setup"}</button>}
-          </section>
-
-          {briefing && <div className="stats-row"><div><strong>{openItems.length}</strong><span>Open actions</span></div><div><strong>{briefing.source_counts.email ?? 0}</strong><span>Emails reviewed</span></div><div><strong>{briefing.source_counts.calendar ?? 0}</strong><span>Events reviewed</span></div></div>}
-
-          <section className="feed">
-            {visibleItems.map((item) => <article className={`feed-item ${item.priority}`} key={item.id}>
-              <div className="feed-icon">{item.item_type === "calendar" ? "C" : "M"}</div>
-              <div className="feed-body"><div className="feed-meta"><span>{item.priority}</span><span>{item.source_label}</span>{item.due_at && <span>{new Date(item.due_at).toLocaleString()}</span>}</div><h3>{item.title}</h3><p>{item.summary}</p><small>{item.reason}</small><div className="item-actions">{item.source_url && <a href={item.source_url} target="_blank" rel="noreferrer">Open source</a>}<button onClick={() => void updateItem(item.id, "done")}>Done</button><button onClick={() => void updateItem(item.id, "snoozed")}>Snooze</button><button onClick={() => void updateItem(item.id, "dismissed")}>Dismiss</button></div></div>
-            </article>)}
-            {user && briefing && !visibleItems.length && <div className="empty-state"><h3>You&apos;re clear for now.</h3><p>No open items remain in this briefing.</p></div>}
-          </section>
+      <section className="chat-main">
+        {view === "chat" ? <>
+          <header className="chat-header"><div><strong>{activeConversation?.title || "The AI IT Department"}</strong><small>{connected ? `Connected to ${status.connection?.provider_account_label}` : "Business assistant"}</small></div><button className="mobile-settings" onClick={() => user ? setView("settings") : setShowAuth(true)}>Settings</button></header>
+          <div className="message-scroll">
+            {!messages.length && <section className="empty-chat">
+              <div className="assistant-mark">AI</div><h1>{user ? "How can I help with your business today?" : "Your connected AI business assistant"}</h1><p>{assistantWelcome}</p>
+              <div className="starter-grid">{starters.map((starter) => <button key={starter} onClick={() => void sendMessage(starter)}>{starter}<span>→</span></button>)}</div>
+            </section>}
+            <div className="messages">{messages.map((item) => <article className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "AI" : user?.email?.slice(0, 1).toUpperCase()}</div><div className="message-content"><strong>{item.role === "assistant" ? "AI IT Department" : "You"}</strong><p>{item.content}</p></div></article>)}</div>
+            {runStatus && <div className="thinking"><span></span>{runStatus}</div>}
+            <div ref={bottomRef} />
+          </div>
+          <div className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKeyDown} placeholder="Ask about email, appointments, customers, documents or today's priorities…" rows={1} /><button onClick={() => void sendMessage()} disabled={!draft.trim() || busy === "chat"}>↑</button></div><small>The assistant can inspect connected data. Write actions will always require approval.</small></div>
+        </> : <>
+          <header className="chat-header"><div><strong>Settings & connections</strong><small>Manage the context and accounts your assistant can use.</small></div><button className="mobile-settings" onClick={() => setView("chat")}>Back to chat</button></header>
+          <div className="settings-scroll">
+            <section className="settings-section"><h2>Business workspace</h2><form className="settings-card" onSubmit={saveWorkspace}><label>Workspace name<input value={businessName} minLength={2} required onChange={(e) => setBusinessName(e.target.value)} /></label><button disabled={busy === "workspace"}>Save</button></form></section>
+            <section className="settings-section"><h2>Assistant context</h2><form className="onboarding-card" onSubmit={saveOnboarding}><label>Business type<input required value={businessType} onChange={(e) => setBusinessType(e.target.value)} placeholder="Salon, consultancy, contractor…" /></label><label>Your role<input required value={userRole} onChange={(e) => setUserRole(e.target.value)} placeholder="Owner, manager, assistant…" /></label><label>Timezone<input required value={timezone} onChange={(e) => setTimezone(e.target.value)} /></label><label>Communication style<input value={communicationStyle} onChange={(e) => setCommunicationStyle(e.target.value)} /></label><label>Typical customers<input value={typicalCustomers} onChange={(e) => setTypicalCustomers(e.target.value)} /></label><label>Working hours<input value={workingHours} onChange={(e) => setWorkingHours(e.target.value)} placeholder="Mon–Sat, 08:00–18:00" /></label><label className="wide">Important operating rules<textarea value={importantRules} onChange={(e) => setImportantRules(e.target.value)} rows={3} /></label><button disabled={busy === "onboarding"}>{profile?.onboarding_completed_at ? "Update context" : "Complete onboarding"}</button></form></section>
+            <section className="settings-section"><h2>Google Workspace</h2><div className="connection-card"><div><span className={connected ? "status-dot live" : "status-dot"}></span><strong>{connected ? status.connection?.provider_account_label : "Not connected"}</strong><p>Gmail and Calendar are available to the assistant. Google Drive arrives in Patch 2.</p></div><div className="connection-actions">{connected ? <><button onClick={() => void runChecks()} disabled={busy === "checks"}>{checksPassed ? "Run checks again" : "Run checks"}</button><button className="danger" onClick={() => void disconnect()} disabled={busy === "disconnect"}>Disconnect</button></> : <button className="primary-small" onClick={() => void connectGoogle()} disabled={!workspace?.profile_complete || busy === "connect"}>Connect Google</button>}</div></div></section>
+          </div>
         </>}
       </section>
 
-      {showAuth && !user && <div className="modal-backdrop" onMouseDown={() => setShowAuth(false)}><section className="auth-modal" onMouseDown={(e) => e.stopPropagation()}><button className="modal-close" onClick={() => setShowAuth(false)}>×</button><h2>{authMode === "signup" ? "Create your workspace" : "Welcome back"}</h2><p>Your session stays active on this device.</p><button className="google-button" onClick={continueWithGoogle} disabled={busy === "google-auth"}>Continue with Google</button><div className="divider"><span>or</span></div><form onSubmit={authenticate}><input type="email" required placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} /><input type="password" required minLength={8} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} /><button className="primary" disabled={busy === "auth"}>{busy === "auth" ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}</button></form><button className="text-button" onClick={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}>{authMode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}</button>{message && <p className="auth-message">{message}</p>}</section></div>}
-      {message && user && <div className="toast">{message}<button onClick={() => setMessage("")}>×</button></div>}
+      {showAuth && !user && <div className="modal-backdrop" onMouseDown={() => setShowAuth(false)}><section className="auth-modal" onMouseDown={(e) => e.stopPropagation()}><button className="modal-close" onClick={() => setShowAuth(false)}>×</button><h2>{authMode === "signup" ? "Create your workspace" : "Welcome back"}</h2><p>Sign in only when you are ready to use connected capabilities. Your session stays active on this device.</p><button className="google-button" onClick={() => void continueWithGoogle()} disabled={busy === "google-auth"}>Continue with Google</button><div className="divider"><span>or</span></div><form onSubmit={authenticate}><input type="email" required placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} /><input type="password" required minLength={8} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} /><button className="auth-primary" disabled={busy === "auth"}>{busy === "auth" ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}</button></form><button className="switch-auth" onClick={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}>{authMode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}</button>{notice && <p className="auth-notice">{notice}</p>}</section></div>}
+      {notice && user && <div className="toast">{notice}<button onClick={() => setNotice("")}>×</button></div>}
     </main>
   );
 }

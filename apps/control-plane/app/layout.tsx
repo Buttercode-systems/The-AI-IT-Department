@@ -1,8 +1,8 @@
 import "./styles.css";
 
 export const metadata = {
-  title: "The AI IT Department",
-  description: "Connect, verify and configure your business AI workspace.",
+  title: "AID — AI IT Department",
+  description: "A conversational AI assistant for your connected business workspace.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
