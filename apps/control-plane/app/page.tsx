@@ -18,12 +18,17 @@ type LiveStatus = {
   capability: { status: string; activated_at?: string; config?: { preview?: { unread_messages: number; today_events: number } } } | null;
 };
 
+type AuthMode = "signin" | "signup";
+
 export default function HomePage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>({ connection: null, latestTest: null, capability: null });
+  const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [message, setMessage] = useState("");
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -35,8 +40,15 @@ export default function HomePage() {
     if (error) setMessage(`Connection error: ${error.replaceAll("_", " ")}`);
     if (params.size) window.history.replaceState({}, "", window.location.pathname);
 
-    void supabase.auth.getUser().then(({ data }) => setUser(data.user));
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
+    void supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null);
+      setAuthReady(true);
+    });
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthReady(true);
+    });
     return () => data.subscription.unsubscribe();
   }, [supabase]);
 
@@ -76,13 +88,64 @@ export default function HomePage() {
     }
   }
 
-  async function signIn(event: FormEvent) {
-    event.preventDefault();
-    setBusyAction("signin");
+  async function continueWithGoogle() {
+    setBusyAction("google-auth");
     setMessage("");
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: window.location.origin,
+        queryParams: {
+          access_type: "offline",
+          prompt: "select_account",
+        },
+      },
+    });
+    if (error) {
+      setBusyAction(null);
+      setMessage(error.message);
+    }
+  }
+
+  async function authenticate(event: FormEvent) {
+    event.preventDefault();
+    if (password.length < 8) {
+      setMessage("Use a password with at least 8 characters.");
+      return;
+    }
+
+    setBusyAction("auth");
+    setMessage("");
+
+    if (authMode === "signup") {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: window.location.origin },
+      });
+      setBusyAction(null);
+      if (error) setMessage(error.message);
+      else if (data.session) setMessage("Account created. This device will keep you signed in.");
+      else setMessage("Account created. Confirm your email once, then sign in with your password.");
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     setBusyAction(null);
-    setMessage(error ? error.message : "Check your email for the secure sign-in link.");
+    setMessage(error ? error.message : "Signed in. This device will keep your session active.");
+  }
+
+  async function sendPasswordReset() {
+    if (!email) {
+      setMessage("Enter your email address first.");
+      return;
+    }
+    setBusyAction("reset");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    setBusyAction(null);
+    setMessage(error ? error.message : "Password reset email sent.");
   }
 
   async function saveWorkspace(event: FormEvent) {
@@ -157,11 +220,35 @@ export default function HomePage() {
     setLiveStatus({ connection: null, latestTest: null, capability: null });
   }
 
+  if (!authReady) {
+    return <main className="shell"><section className="panel auth"><h2>Loading your secure session…</h2></section></main>;
+  }
+
   if (!user) {
     return (
       <main className="shell">
-        <section className="hero"><span className="eyebrow">THE AI IT DEPARTMENT</span><h1>Your business tools, connected to AI without the setup headache.</h1><p>Sign in to create your private workspace, connect your own accounts, verify permissions and activate useful AI capabilities.</p></section>
-        <form className="panel auth" onSubmit={signIn}><h2>Start secure setup</h2><label>Email address</label><input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" /><button disabled={busyAction === "signin"}>{busyAction === "signin" ? "Sending…" : "Email me a sign-in link"}</button>{message && <p className="notice">{message}</p>}</form>
+        <section className="hero">
+          <span className="eyebrow">THE AI IT DEPARTMENT</span>
+          <h1>Your business tools, connected to AI without the setup headache.</h1>
+          <p>Sign in once, keep your session, connect your business accounts and activate useful AI capabilities.</p>
+        </section>
+        <form className="panel auth" onSubmit={authenticate}>
+          <h2>{authMode === "signup" ? "Create your account" : "Welcome back"}</h2>
+          <button type="button" className="secondary" disabled={busyAction === "google-auth"} onClick={continueWithGoogle}>
+            {busyAction === "google-auth" ? "Opening Google…" : "Continue with Google"}
+          </button>
+          <p className="status">or use email and password</p>
+          <label>Email address</label>
+          <input type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@company.com" autoComplete="email" />
+          <label>Password</label>
+          <input type="password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" autoComplete={authMode === "signup" ? "new-password" : "current-password"} />
+          <button disabled={busyAction === "auth"}>{busyAction === "auth" ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}</button>
+          <button type="button" className="secondary" onClick={() => { setAuthMode(authMode === "signin" ? "signup" : "signin"); setMessage(""); }}>
+            {authMode === "signin" ? "Create a new account" : "I already have an account"}
+          </button>
+          {authMode === "signin" && <button type="button" className="secondary" disabled={busyAction === "reset"} onClick={sendPasswordReset}>Forgot password?</button>}
+          {message && <p className="notice">{message}</p>}
+        </form>
       </main>
     );
   }
@@ -178,7 +265,7 @@ export default function HomePage() {
       <section className="progress panel"><div><strong>{progress}%</strong><span>Setup complete</span></div><div className="bar"><i style={{ width: `${progress}%` }} /></div></section>
       <section className="grid">
         <form className="panel" onSubmit={saveWorkspace}><span className="step">STEP 1</span><h2>Name your workspace</h2><p>This becomes the secure tenant boundary for your company.</p><input required minLength={2} value={businessName} onChange={(event) => setBusinessName(event.target.value)} placeholder="Your business name" /><button disabled={busyAction === "workspace"}>{busyAction === "workspace" ? "Saving…" : "Save workspace"}</button></form>
-        <section className="panel"><span className="step">STEP 2</span><h2>Connect Google Workspace</h2><p>Gmail and Calendar connect through Google&apos;s official permission screen.</p><div className="status"><span className={googleConnected ? "dot connected" : "dot"} />{googleConnected ? liveStatus.connection?.provider_account_label ?? "Connected" : "Not connected"}</div>{googleConnected ? <><button className="secondary" disabled={busyAction === "disconnect"} onClick={disconnectGoogle}>{busyAction === "disconnect" ? "Disconnecting…" : "Disconnect Google"}</button></> : <button disabled={!workspace?.profile_complete || busyAction === "connect"} onClick={connectGoogle}>{busyAction === "connect" ? "Opening Google…" : "Connect Google"}</button>}</section>
+        <section className="panel"><span className="step">STEP 2</span><h2>Connect Google Workspace</h2><p>Gmail and Calendar connect through Google&apos;s official permission screen.</p><div className="status"><span className={googleConnected ? "dot connected" : "dot"} />{googleConnected ? liveStatus.connection?.provider_account_label ?? "Connected" : "Not connected"}</div>{googleConnected ? <button className="secondary" disabled={busyAction === "disconnect"} onClick={disconnectGoogle}>{busyAction === "disconnect" ? "Disconnecting…" : "Disconnect Google"}</button> : <button disabled={!workspace?.profile_complete || busyAction === "connect"} onClick={connectGoogle}>{busyAction === "connect" ? "Opening Google…" : "Connect Google"}</button>}</section>
         <section className={`panel${googleConnected ? "" : " muted"}`}><span className="step">STEP 3</span><h2>Run connection checks</h2><p>Verify required scopes plus live Gmail and Calendar read access.</p>{checksPassed && <div className="status"><span className="dot connected" />All checks passed</div>}<button disabled={!googleConnected || busyAction === "checks"} onClick={runChecks}>{busyAction === "checks" ? "Running checks…" : checksPassed ? "Run checks again" : "Run checks"}</button></section>
         <section className={`panel${checksPassed ? "" : " muted"}`}><span className="step">STEP 4</span><h2>Activate daily briefing</h2><p>Generate a live preview from unread Gmail messages and today&apos;s Calendar events.</p>{capabilityActive && <div className="status"><span className="dot connected" />Active{preview ? ` · ${preview.unread_messages} unread · ${preview.today_events} events` : ""}</div>}<button disabled={!checksPassed || capabilityActive || busyAction === "activate"} onClick={activateBriefing}>{busyAction === "activate" ? "Activating…" : capabilityActive ? "Daily briefing active" : "Activate capability"}</button></section>
       </section>
