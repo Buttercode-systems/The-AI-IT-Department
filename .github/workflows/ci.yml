@@ -19,8 +19,19 @@ jobs:
           node-version: 24
       - run: npm install --silent
       - name: Typecheck
+        id: typecheck
+        continue-on-error: true
         shell: bash
-        run: set -o pipefail; npm run typecheck 2>&1 | tail -120
+        run: npm run typecheck > typecheck.log 2>&1
+      - name: Upload typecheck diagnostics
+        if: steps.typecheck.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-diagnostics
+          path: typecheck.log
+      - name: Fail on typecheck error
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
       - name: Test
         shell: bash
         run: set -o pipefail; npm run test 2>&1 | tail -120
