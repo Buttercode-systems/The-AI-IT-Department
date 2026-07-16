@@ -56,32 +56,67 @@ export function agentModelName() {
   catch { return process.env.GROQ_MODEL || process.env.AI_MODEL || process.env.OPENAI_MODEL || "llama-3.3-70b-versatile"; }
 }
 
+export function agentModelProvider() {
+  try { return modelConfig().provider; }
+  catch { return "unconfigured"; }
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function completeAgent(messages: AgentMessage[]) {
   const config = modelConfig();
-  // Groq's OpenAI-compatible endpoint currently rejects messages[].name.
   const providerMessages = config.provider === "groq"
     ? messages.map(({ name: _name, ...message }) => message)
     : messages;
 
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages: providerMessages,
-      tools: agentTools,
-      tool_choice: "auto",
-      temperature: 0.2,
-    }),
-    cache: "no-store",
-  });
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${config.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages: providerMessages,
+          tools: agentTools,
+          tool_choice: "auto",
+          temperature: 0.2,
+        }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
 
-  const payload = await response.json() as Completion;
-  if (!response.ok) throw new Error(payload.error?.message || "MODEL_REQUEST_FAILED");
-  const message = payload.choices?.[0]?.message;
-  if (!message) throw new Error("MODEL_EMPTY_RESPONSE");
-  return message;
+      const payload = await response.json().catch(() => ({})) as Completion;
+      if (response.ok) {
+        const message = payload.choices?.[0]?.message;
+        if (!message) throw new Error("MODEL_EMPTY_RESPONSE");
+        return message;
+      }
+
+      const retryable = response.status === 429 || response.status >= 500;
+      if (!retryable || attempt === maxAttempts) {
+        if (response.status === 429) throw new Error("MODEL_RATE_LIMITED");
+        throw new Error(payload.error?.message || "MODEL_REQUEST_FAILED");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        if (attempt === maxAttempts) throw new Error("MODEL_TIMEOUT");
+      } else if (error instanceof Error && ["MODEL_EMPTY_RESPONSE", "MODEL_RATE_LIMITED", "MODEL_REQUEST_FAILED"].includes(error.message)) {
+        throw error;
+      } else if (attempt === maxAttempts) {
+        throw new Error("MODEL_REQUEST_FAILED");
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    await wait(250 * 2 ** (attempt - 1));
+  }
+  throw new Error("MODEL_REQUEST_FAILED");
 }

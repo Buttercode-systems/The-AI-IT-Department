@@ -1,10 +1,13 @@
 import { getUserOrganization, requireBearerUser } from "../../../../../lib/api-auth";
-import { agentModelName, completeAgent, type AgentMessage } from "../../../../../lib/agent-model";
+import { agentModelName, agentModelProvider, completeAgent, type AgentMessage } from "../../../../../lib/agent-model";
 import { executeAgentTool } from "../../../../../lib/agent-tools";
+import { consumeRateLimit, rateLimitResponse } from "../../../../../lib/rate-limit";
+import { createRuntimeContext, finishRun, recordUsage, requestMetadata, safeErrorCode } from "../../../../../lib/runtime-controls";
 import { createSupabaseAdminClient } from "../../../../../lib/server-supabase";
 
 const encoder = new TextEncoder();
 const MAX_TOOL_STEPS = 8;
+const MAX_TOOL_CALLS = 16;
 
 function event(type: string, data: unknown) {
   return encoder.encode(`${JSON.stringify({ type, data })}\n`);
@@ -41,15 +44,20 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return Response.json({ error: message }, { status: 401 });
   }
 
+  const rateLimit = await consumeRateLimit(organizationId, user.id, "agent_chat", 20, 60);
+  if (!rateLimit.allowed) return rateLimitResponse(rateLimit);
+
   const { id: conversationId } = await context.params;
   const body = await request.json().catch(() => ({})) as { message?: string };
   const requestText = body.message?.trim();
   if (!requestText) return Response.json({ error: "MESSAGE_REQUIRED" }, { status: 400 });
+  if (requestText.length > 12_000) return Response.json({ error: "MESSAGE_TOO_LONG" }, { status: 413 });
 
   const admin = createSupabaseAdminClient();
   const { data: conversation } = await admin.from("conversations").select("id,title").eq("id", conversationId).eq("organization_id", organizationId).eq("user_id", user.id).single();
   if (!conversation) return Response.json({ error: "CONVERSATION_NOT_FOUND" }, { status: 404 });
 
+  const runtime = createRuntimeContext();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let runId: string | null = null;
@@ -75,13 +83,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           user_id: user.id,
           status: "running",
           model: agentModelName(),
+          provider: agentModelProvider(),
+          correlation_id: runtime.correlationId,
           request_text: requestText,
+          request_metadata: requestMetadata(request),
         }).select("id").single();
         if (runError || !run) throw new Error("AGENT_RUN_CREATE_FAILED");
         runId = run.id;
 
         controller.enqueue(event("user_message", userMessage));
-        controller.enqueue(event("status", { message: "Understanding your request…" }));
+        controller.enqueue(event("status", { message: "Understanding your request…", correlation_id: runtime.correlationId }));
 
         const history: AgentMessage[] = [
           { role: "system", content: systemPrompt({ organizationName: organization?.name ?? "Business workspace", profile: profile as Record<string, unknown> | null }) },
@@ -91,10 +102,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         const toolLog: Array<Record<string, unknown>> = [];
         const approvalIds: string[] = [];
         let finalText = "";
+        let totalToolCalls = 0;
 
         for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
           const assistant = await completeAgent(history);
           if (assistant.tool_calls?.length) {
+            if (totalToolCalls + assistant.tool_calls.length > MAX_TOOL_CALLS) throw new Error("TOOL_CALL_LIMIT_REACHED");
+            totalToolCalls += assistant.tool_calls.length;
             history.push(assistant);
             for (const call of assistant.tool_calls) {
               const toolName = call.function.name;
@@ -111,7 +125,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
                 toolLog.push({ id: call.id, name: toolName, status: "success", approval_id: approval?.id ?? null });
                 controller.enqueue(event("tool_result", { id: call.id, name: toolName, status: "success" }));
               } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : "TOOL_FAILED";
+                const errorMessage = safeErrorCode(error);
                 result = { error: errorMessage };
                 toolLog.push({ id: call.id, name: toolName, status: "error", error: errorMessage });
                 controller.enqueue(event("tool_result", { id: call.id, name: toolName, status: "error", error: errorMessage }));
@@ -126,7 +140,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
                 content: serialized,
                 tool_name: toolName,
                 tool_call_id: call.id,
-                metadata: { args },
+                metadata: { args, correlation_id: runtime.correlationId },
               });
             }
             continue;
@@ -142,23 +156,31 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           user_id: user.id,
           role: "assistant",
           content: finalText,
-          metadata: { run_id: runId, tool_count: toolLog.length, approval_ids: approvalIds },
+          metadata: { run_id: runId, correlation_id: runtime.correlationId, tool_count: toolLog.length, approval_ids: approvalIds },
         }).select("id,role,content,metadata,created_at").single();
         if (assistantError || !savedAssistant) throw new Error("ASSISTANT_MESSAGE_SAVE_FAILED");
 
+        const finalStatus = approvalIds.length ? "awaiting_approval" : "completed";
         const title = conversation.title === "New conversation" ? requestText.slice(0, 72) : conversation.title;
         await Promise.all([
           admin.from("conversations").update({ title, updated_at: new Date().toISOString() }).eq("id", conversationId),
-          admin.from("agent_runs").update({ status: approvalIds.length ? "awaiting_approval" : "completed", response_text: finalText, tool_calls: toolLog, completed_at: new Date().toISOString() }).eq("id", runId),
-          admin.from("audit_events").insert({ organization_id: organizationId, actor_user_id: user.id, source: "assistant", tool_name: "agent_run", resource_type: "conversation", operation: "execute", result: "success", metadata: { conversation_id: conversationId, run_id: runId, tool_count: toolLog.length, approval_count: approvalIds.length } }),
+          finishRun({ runId, correlationId: runtime.correlationId, startedAt: runtime.startedAt, status: finalStatus, responseText: finalText, toolCalls: toolLog }),
+          recordUsage({ organizationId, userId: user.id, eventType: "agent_run", metadata: { run_id: runId, correlation_id: runtime.correlationId, tool_calls: toolLog.length, approvals: approvalIds.length, provider: agentModelProvider(), model: agentModelName() } }),
+          admin.from("audit_events").insert({ organization_id: organizationId, actor_user_id: user.id, source: "assistant", tool_name: "agent_run", resource_type: "conversation", operation: "execute", result: "success", metadata: { conversation_id: conversationId, run_id: runId, correlation_id: runtime.correlationId, tool_count: toolLog.length, approval_count: approvalIds.length } }),
         ]);
 
         controller.enqueue(event("assistant_message", savedAssistant));
-        controller.enqueue(event("done", { run_id: runId, conversation_id: conversationId, approval_ids: approvalIds }));
+        controller.enqueue(event("done", { run_id: runId, correlation_id: runtime.correlationId, conversation_id: conversationId, approval_ids: approvalIds }));
       } catch (error) {
-        const message = error instanceof Error ? error.message : "AGENT_FAILED";
-        if (runId) await admin.from("agent_runs").update({ status: "failed", error_code: message, completed_at: new Date().toISOString() }).eq("id", runId);
-        controller.enqueue(event("error", { message }));
+        const code = safeErrorCode(error);
+        console.error("agent_run_failed", { correlationId: runtime.correlationId, code });
+        if (runId) {
+          await Promise.all([
+            finishRun({ runId, correlationId: runtime.correlationId, startedAt: runtime.startedAt, status: "failed", errorCode: code }),
+            recordUsage({ organizationId, userId: user.id, eventType: "agent_run_failed", metadata: { run_id: runId, correlation_id: runtime.correlationId, error_code: code } }),
+          ]);
+        }
+        controller.enqueue(event("error", { message: code, correlation_id: runtime.correlationId }));
       } finally {
         controller.close();
       }
@@ -170,6 +192,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       "content-type": "application/x-ndjson; charset=utf-8",
       "cache-control": "no-store",
       connection: "keep-alive",
+      "x-correlation-id": runtime.correlationId,
+      "x-ratelimit-remaining": String(rateLimit.remaining),
+      "x-ratelimit-reset": rateLimit.reset_at,
     },
   });
 }
