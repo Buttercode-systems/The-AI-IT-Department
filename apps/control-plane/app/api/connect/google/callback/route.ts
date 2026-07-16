@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { decryptSecret, encryptSecret, sha256 } from "../../../../../lib/crypto";
-import { createSupabaseAdminClient, createSupabaseServerClient } from "../../../../../lib/server-supabase";
+import { createSupabaseAdminClient } from "../../../../../lib/server-supabase";
 
 type GoogleTokenResponse = {
   access_token: string;
@@ -38,10 +38,6 @@ export async function GET(request: Request) {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return redirectWith(request, "error", "google_not_configured");
 
-  const supabase = await createSupabaseServerClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return redirectWith(request, "error", "signin_required");
-
   const admin = createSupabaseAdminClient();
   const { data: oauthState, error: stateError } = await admin
     .from("oauth_states")
@@ -52,7 +48,6 @@ export async function GET(request: Request) {
   if (
     stateError ||
     !oauthState ||
-    oauthState.user_id !== user.id ||
     oauthState.consumed_at ||
     new Date(oauthState.expires_at).getTime() <= Date.now()
   ) {
@@ -76,6 +71,7 @@ export async function GET(request: Request) {
   const tokens = (await tokenResponse.json()) as GoogleTokenResponse;
   if (!tokenResponse.ok || !tokens.access_token) {
     await admin.from("oauth_states").update({ consumed_at: new Date().toISOString() }).eq("id", oauthState.id);
+    console.error("Google token exchange failed", tokens.error, tokens.error_description);
     return redirectWith(request, "error", tokens.error ?? "google_token_exchange_failed");
   }
 
@@ -100,7 +96,7 @@ export async function GET(request: Request) {
 
   const { error: connectionError } = await admin.from("provider_connections").upsert({
     organization_id: oauthState.organization_id,
-    user_id: user.id,
+    user_id: oauthState.user_id,
     provider: "google",
     provider_account_id: googleUser.sub,
     provider_account_label: googleUser.email,
@@ -116,11 +112,14 @@ export async function GET(request: Request) {
 
   await admin.from("oauth_states").update({ consumed_at: new Date().toISOString() }).eq("id", oauthState.id);
 
-  if (connectionError) return redirectWith(request, "error", "connection_save_failed");
+  if (connectionError) {
+    console.error("Failed to save Google connection", connectionError);
+    return redirectWith(request, "error", "connection_save_failed");
+  }
 
   await admin.from("audit_events").insert({
     organization_id: oauthState.organization_id,
-    actor_user_id: user.id,
+    actor_user_id: oauthState.user_id,
     source: "control_plane",
     tool_name: "connect_google",
     provider: "google",
