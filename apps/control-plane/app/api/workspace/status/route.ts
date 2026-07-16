@@ -9,7 +9,7 @@ export async function GET(request: Request) {
     const admin = createSupabaseAdminClient();
 
     const [{ data: connection }, { data: latestTest }, { data: capability }] = await Promise.all([
-      admin.from("provider_connections").select("id,status,provider_account_label,last_verified_at,revoked_at").eq("organization_id", organizationId).eq("provider", "google").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
+      admin.from("provider_connections").select("id,status,provider_account_label,granted_scopes,last_verified_at,revoked_at").eq("organization_id", organizationId).eq("provider", "google").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
       admin.from("connection_tests").select("status,gmail_ok,calendar_ok,scopes_ok,details,created_at").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       admin.from("capabilities").select("status,activated_at,config").eq("organization_id", organizationId).eq("capability_key", "daily_briefing").maybeSingle(),
     ]);
