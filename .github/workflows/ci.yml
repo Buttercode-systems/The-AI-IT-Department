@@ -17,7 +17,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm install
-      - run: npm run typecheck
-      - run: npm run test
-      - run: npm run build
+      - run: npm install --silent
+      - name: Typecheck
+        shell: bash
+        run: set -o pipefail; npm run typecheck 2>&1 | tail -120
+      - name: Test
+        shell: bash
+        run: set -o pipefail; npm run test 2>&1 | tail -120
+      - name: Build
+        shell: bash
+        run: set -o pipefail; npm run build 2>&1 | tail -160
