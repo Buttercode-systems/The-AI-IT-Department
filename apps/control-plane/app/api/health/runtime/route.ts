@@ -1,5 +1,6 @@
 export const dynamic = "force-dynamic";
 
+// This endpoint exposes readiness booleans only; it never returns secrets.
 export async function GET() {
   const modelProviderConfigured = Boolean(
     process.env.AI_GATEWAY_API_KEY ||
