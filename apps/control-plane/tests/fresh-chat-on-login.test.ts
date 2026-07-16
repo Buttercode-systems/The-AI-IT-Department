@@ -8,6 +8,9 @@ test("workspace bootstrap keeps conversation history but starts on a fresh chat"
   const source = await readFile(pagePath, "utf8");
 
   assert.match(source, /setConversations\(threads\.conversations\)/);
-  assert.match(source, /setActiveConversationId\(null\); setMessages\(\[\]\); setView\("chat"\)/);
+  assert.match(source, /returnToChatHome\(\)/);
+  assert.match(source, /setActiveConversationId\(null\)/);
+  assert.match(source, /setMessages\(\[\]\)/);
+  assert.match(source, /setView\("chat"\)/);
   assert.doesNotMatch(source, /if \(threads\.conversations\[0\]\) await openConversation/);
 });
