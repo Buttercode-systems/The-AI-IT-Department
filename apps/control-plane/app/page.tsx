@@ -39,6 +39,7 @@ export default function HomePage() {
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const [view, setView] = useState<View>("chat");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [status, setStatus] = useState<LiveStatus>({ connection: null, latestTest: null, capability: null });
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -74,10 +75,24 @@ export default function HomePage() {
 
   useEffect(() => { if (user) void bootstrap(); else resetPrivateState(); }, [user]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, runStatus]);
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const close = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setMobileNavOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [mobileNavOpen]);
 
   function resetPrivateState() {
-    setWorkspace(null); setConversations([]); setActiveConversationId(null); setMessages([]); setProfile(null);
+    setWorkspace(null); setConversations([]); setActiveConversationId(null); setMessages([]); setProfile(null); setMobileNavOpen(false);
     setStatus({ connection: null, latestTest: null, capability: null });
+  }
+
+  function returnToChatHome() {
+    setActiveConversationId(null);
+    setMessages([]);
+    setRunStatus("");
+    setView("chat");
+    setMobileNavOpen(false);
   }
 
   async function accessToken() {
@@ -108,7 +123,7 @@ export default function HomePage() {
         api<{ conversations: Conversation[] }>("/api/conversations", "GET"),
       ]);
       setStatus(live); setProfile(onboarding.profile); hydrateProfile(onboarding.profile); setConversations(threads.conversations);
-      setActiveConversationId(null); setMessages([]); setView("chat");
+      returnToChatHome();
     } catch (error) { setNotice(error instanceof Error ? error.message : "Could not load your workspace."); }
   }
 
@@ -119,7 +134,7 @@ export default function HomePage() {
   }
 
   async function openConversation(id: string) {
-    setBusy("thread"); setActiveConversationId(id); setView("chat");
+    setBusy("thread"); setActiveConversationId(id); setView("chat"); setMobileNavOpen(false);
     try {
       const result = await api<{ messages: ChatMessage[] }>(`/api/conversations/${id}/messages`, "GET");
       setMessages(result.messages.filter((item) => item.role !== "tool"));
@@ -129,6 +144,7 @@ export default function HomePage() {
 
   async function newConversation() {
     if (!user) return setShowAuth(true);
+    setMobileNavOpen(false);
     const result = await api<{ conversation: Conversation }>("/api/conversations", "POST", {});
     setConversations((current) => [result.conversation, ...current]);
     setActiveConversationId(result.conversation.id); setMessages([]); setView("chat");
@@ -231,7 +247,7 @@ export default function HomePage() {
     finally { setBusy(null); }
   }
 
-  async function signOut() { await supabase.auth.signOut(); setView("chat"); }
+  async function signOut() { setMobileNavOpen(false); await supabase.auth.signOut(); setView("chat"); }
 
   const connected = status.connection?.status === "connected" || status.connection?.status === "error";
   const scopes = status.connection?.granted_scopes ?? [];
@@ -243,12 +259,12 @@ export default function HomePage() {
       : "Your Google account is connected, but AID needs the new execution permissions. Open Settings and reconnect Google."
     : "Connect Google Workspace when you are ready. AID can then work across Gmail, Calendar and Drive through conversation.";
 
-  if (!authReady) return <main className="loading">Loading…</main>;
+  if (!authReady) return <main className="loading"><span className="loading-mark">AID</span><span>Preparing your workspace…</span></main>;
 
   return (
     <main className="chat-app">
       <aside className="chat-sidebar">
-        <div className="sidebar-top"><button className="wordmark" onClick={() => setView("chat")}><span>AID</span><strong>AI IT Department</strong></button><button className="icon-button" title="New conversation" onClick={() => void newConversation()}>＋</button></div>
+        <div className="sidebar-top"><button className="wordmark" onClick={returnToChatHome}><span>AID</span><strong>AI IT Department</strong></button><button className="icon-button" aria-label="New conversation" title="New conversation" onClick={() => void newConversation()}>＋</button></div>
         <button className="new-chat" onClick={() => void newConversation()}>＋ New conversation</button>
         <div className="thread-list">
           {user && conversations.map((item) => <button key={item.id} className={item.id === activeConversationId && view === "chat" ? "active" : ""} onClick={() => void openConversation(item.id)}><span>{item.title}</span></button>)}
@@ -261,16 +277,23 @@ export default function HomePage() {
 
       <section className="chat-main">
         {view === "chat" ? <>
-          <header className="chat-header"><div><strong>{activeConversation?.title || "AID"}</strong><small>{executionReady ? `Ready with ${status.connection?.provider_account_label}` : connected ? "Google reconnection required" : "AI IT Department"}</small></div><button className="mobile-settings" onClick={() => user ? setView("settings") : setShowAuth(true)}>Settings</button></header>
+          <header className="chat-header mobile-release-header">
+            <div className="mobile-header-leading">
+              {activeConversationId && <button className="mobile-back" aria-label="Back to new chat" onClick={returnToChatHome}>‹</button>}
+              <button className="mobile-history" aria-label="Open conversations" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>☰</button>
+              <div className="header-copy"><strong>{activeConversation?.title || "AID"}</strong><small>{executionReady ? `Ready with ${status.connection?.provider_account_label}` : connected ? "Google reconnection required" : "AI IT Department"}</small></div>
+            </div>
+            <button className="mobile-settings" onClick={() => user ? setView("settings") : setShowAuth(true)}>Settings</button>
+          </header>
           <div className="message-scroll">
             {!messages.length && <section className="empty-chat"><div className="assistant-mark">AID</div><h1>{user ? "What should AID handle?" : "Your AI IT Department"}</h1><p>{assistantWelcome}</p><div className="starter-grid">{starters.map((starter) => <button key={starter} onClick={() => void sendMessage(starter)}>{starter}<span>→</span></button>)}</div></section>}
             <div className="messages">{messages.map((item) => <article className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "AID" : user?.email?.slice(0, 1).toUpperCase()}</div><div className="message-content"><strong>{item.role === "assistant" ? "AID" : "You"}</strong><p>{item.content}</p></div></article>)}</div>
-            {runStatus && <div className="thinking"><span></span>{runStatus}</div>}
+            {runStatus && <div className="thinking" role="status" aria-live="polite"><span></span>{runStatus}</div>}
             <div ref={bottomRef} />
           </div>
-          <div className="composer-wrap"><div className="composer"><textarea value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKeyDown} placeholder="Ask AID to find, draft, schedule, organise or prepare an action…" rows={1} /><button onClick={() => void sendMessage()} disabled={!draft.trim() || busy === "chat"}>↑</button></div><small>AID reads connected data directly. External and destructive actions require your approval.</small></div>
+          <div className="composer-wrap"><div className="composer"><textarea aria-label="Message AID" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKeyDown} placeholder="Message AID" rows={1} /><button aria-label="Send message" onClick={() => void sendMessage()} disabled={!draft.trim() || busy === "chat"}>↑</button></div><small>AID reads connected data directly. External and destructive actions require your approval.</small></div>
         </> : <>
-          <header className="chat-header"><div><strong>Settings & connections</strong><small>Manage the context and accounts AID can use.</small></div><button className="mobile-settings" onClick={() => setView("chat")}>Back to chat</button></header>
+          <header className="chat-header"><div className="mobile-header-leading"><button className="mobile-back" aria-label="Back to chat" onClick={() => setView("chat")}>‹</button><div><strong>Settings & connections</strong><small>Manage the context and accounts AID can use.</small></div></div><button className="mobile-settings" onClick={() => setView("chat")}>Done</button></header>
           <div className="settings-scroll">
             <section className="settings-section"><h2>Business workspace</h2><form className="settings-card" onSubmit={saveWorkspace}><label>Workspace name<input value={businessName} minLength={2} required onChange={(e) => setBusinessName(e.target.value)} /></label><button disabled={busy === "workspace"}>Save</button></form></section>
             <section className="settings-section"><h2>AID context</h2><form className="onboarding-card" onSubmit={saveOnboarding}><label>Business type<input required value={businessType} onChange={(e) => setBusinessType(e.target.value)} placeholder="Salon, consultancy, contractor…" /></label><label>Your role<input required value={userRole} onChange={(e) => setUserRole(e.target.value)} placeholder="Owner, manager, assistant…" /></label><label>Timezone<input required value={timezone} onChange={(e) => setTimezone(e.target.value)} /></label><label>Communication style<input value={communicationStyle} onChange={(e) => setCommunicationStyle(e.target.value)} /></label><label>Typical customers<input value={typicalCustomers} onChange={(e) => setTypicalCustomers(e.target.value)} /></label><label>Working hours<input value={workingHours} onChange={(e) => setWorkingHours(e.target.value)} placeholder="Mon–Sat, 08:00–18:00" /></label><label className="wide">Important operating rules<textarea value={importantRules} onChange={(e) => setImportantRules(e.target.value)} rows={3} /></label><button disabled={busy === "onboarding"}>{profile?.onboarding_completed_at ? "Update context" : "Complete onboarding"}</button></form></section>
@@ -279,8 +302,10 @@ export default function HomePage() {
         </>}
       </section>
 
-      {showAuth && !user && <div className="modal-backdrop" onMouseDown={() => setShowAuth(false)}><section className="auth-modal" onMouseDown={(e) => e.stopPropagation()}><button className="modal-close" onClick={() => setShowAuth(false)}>×</button><h2>{authMode === "signup" ? "Create your AID workspace" : "Welcome back"}</h2><p>Sign in only when you are ready to use connected capabilities. Your session stays active on this device.</p><button className="google-button" onClick={() => void continueWithGoogle()} disabled={busy === "google-auth"}>Continue with Google</button><div className="divider"><span>or</span></div><form onSubmit={authenticate}><input type="email" required placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} /><input type="password" required minLength={8} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} /><button className="auth-primary" disabled={busy === "auth"}>{busy === "auth" ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}</button></form><button className="switch-auth" onClick={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}>{authMode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}</button>{notice && <p className="auth-notice">{notice}</p>}</section></div>}
-      {notice && user && <div className="toast">{notice}<button onClick={() => setNotice("")}>×</button></div>}
+      {mobileNavOpen && <div className="mobile-nav-backdrop" onMouseDown={() => setMobileNavOpen(false)}><aside className="mobile-nav-sheet" role="dialog" aria-modal="true" aria-label="Conversations" onMouseDown={(event) => event.stopPropagation()}><div className="mobile-sheet-handle" /><header><div><span>Workspace</span><strong>Conversations</strong></div><button aria-label="Close conversations" onClick={() => setMobileNavOpen(false)}>×</button></header><button className="mobile-sheet-new" onClick={() => void newConversation()}><span>＋</span><div><strong>New conversation</strong><small>Start with a clean context</small></div></button><div className="mobile-thread-list">{conversations.length ? conversations.map((item) => <button key={item.id} className={item.id === activeConversationId ? "active" : ""} onClick={() => void openConversation(item.id)}><span>{item.title}</span><small>{new Date(item.updated_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</small></button>) : <div className="mobile-empty-history"><strong>No conversations yet</strong><p>Your completed conversations will appear here.</p></div>}</div><footer>{user ? <><button onClick={() => { setMobileNavOpen(false); setView("settings"); }}>Settings & connections</button><button onClick={() => void signOut()}>Sign out</button></> : <button onClick={() => { setMobileNavOpen(false); setShowAuth(true); }}>Sign in</button>}</footer></aside></div>}
+
+      {showAuth && !user && <div className="modal-backdrop" onMouseDown={() => setShowAuth(false)}><section className="auth-modal" onMouseDown={(e) => e.stopPropagation()}><button className="modal-close" aria-label="Close" onClick={() => setShowAuth(false)}>×</button><h2>{authMode === "signup" ? "Create your AID workspace" : "Welcome back"}</h2><p>Sign in only when you are ready to use connected capabilities. Your session stays active on this device.</p><button className="google-button" onClick={() => void continueWithGoogle()} disabled={busy === "google-auth"}>Continue with Google</button><div className="divider"><span>or</span></div><form onSubmit={authenticate}><input type="email" required autoComplete="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} /><input type="password" required minLength={8} autoComplete={authMode === "signup" ? "new-password" : "current-password"} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} /><button className="auth-primary" disabled={busy === "auth"}>{busy === "auth" ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}</button></form><button className="switch-auth" onClick={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}>{authMode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}</button>{notice && <p className="auth-notice">{notice}</p>}</section></div>}
+      {notice && user && <div className="toast" role="status" aria-live="polite">{notice}<button aria-label="Dismiss notification" onClick={() => setNotice("")}>×</button></div>}
     </main>
   );
 }
