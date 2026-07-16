@@ -1,6 +1,7 @@
 import { createApproval } from "./agent-approvals";
-import { createSupabaseAdminClient } from "./server-supabase";
 import { getGoogleAccessToken, getGoogleConnection, googleJson, googleRequest } from "./google-connection";
+import { recordUsage } from "./runtime-controls";
+import { createSupabaseAdminClient } from "./server-supabase";
 
 type ToolContext = { organizationId: string; userId: string; conversationId: string };
 type GmailList = { messages?: Array<{ id: string; threadId?: string }> };
@@ -15,7 +16,16 @@ const fn = (name: string, description: string, properties: Record<string, unknow
 });
 
 export const agentTools = [
-  fn("get_workspace_context", "Get the business profile, Google connection, scopes and capability status.", {}),
+  fn("get_workspace_context", "Get the business profile, Google connection, scopes, capability status and active workspace memories.", {}),
+  fn("list_memories", "List explicit business facts AID has been asked to remember. Use this before answering questions about remembered preferences or rules.", {
+    category: { type: "string" },
+  }),
+  fn("save_memory", "Save or update an explicit business fact only when the user clearly asks AID to remember it. Use a stable snake_case key and a concise value.", {
+    key: { type: "string" }, value: { type: "string" }, category: { type: "string" },
+  }, ["key", "value"]),
+  fn("forget_memory", "Delete an explicit memory when the user asks AID to forget it. List memories first if the key is uncertain.", {
+    key: { type: "string" },
+  }, ["key"]),
   fn("search_gmail", "Search Gmail with Gmail query syntax and return source-backed message summaries.", {
     query: { type: "string" }, max_results: { type: "integer", minimum: 1, maximum: 20 },
   }, ["query"]),
@@ -69,17 +79,80 @@ function emailRaw(args: Record<string, unknown>) {
   return base64url(`${headers.join("\r\n")}\r\n\r\n${String(args.body ?? "")}`);
 }
 
+function normalizeMemoryKey(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120);
+}
+
 export async function executeAgentTool(name: string, args: Record<string, unknown>, context: ToolContext) {
   const admin = createSupabaseAdminClient();
 
   if (name === "get_workspace_context") {
-    const [{ data: organization }, { data: profile }, { data: connection }, { data: capability }] = await Promise.all([
+    const [{ data: organization }, { data: profile }, { data: connection }, { data: capability }, { data: memories }] = await Promise.all([
       admin.from("organizations").select("id,name").eq("id", context.organizationId).single(),
       admin.from("business_profiles").select("business_type,user_role,timezone,communication_style,operating_context,onboarding_completed_at").eq("organization_id", context.organizationId).single(),
       admin.from("provider_connections").select("provider,status,provider_account_label,granted_scopes,last_verified_at").eq("organization_id", context.organizationId).eq("provider", "google").neq("status", "revoked").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
       admin.from("capabilities").select("capability,status,activated_at").eq("organization_id", context.organizationId),
+      admin.from("workspace_memories").select("memory_key,memory_value,category,source,updated_at").eq("organization_id", context.organizationId).eq("is_active", true).order("updated_at", { ascending: false }).limit(100),
     ]);
-    return { organization, profile, connection, capabilities: capability ?? [] };
+    return { organization, profile, connection, capabilities: capability ?? [], memories: memories ?? [] };
+  }
+
+  if (name === "list_memories") {
+    let query = admin.from("workspace_memories")
+      .select("id,memory_key,memory_value,category,source,confidence,is_active,created_at,updated_at,last_used_at")
+      .eq("organization_id", context.organizationId)
+      .eq("is_active", true)
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    const category = String(args.category ?? "").trim();
+    if (category) query = query.eq("category", category);
+    const { data, error } = await query;
+    if (error) throw new Error("MEMORY_LIST_FAILED");
+    const ids = (data ?? []).map((item) => item.id);
+    if (ids.length) await admin.from("workspace_memories").update({ last_used_at: new Date().toISOString() }).in("id", ids).eq("organization_id", context.organizationId);
+    return { memories: data ?? [] };
+  }
+
+  if (name === "save_memory") {
+    const key = normalizeMemoryKey(args.key);
+    const value = String(args.value ?? "").trim();
+    if (!key || !value) throw new Error("MEMORY_INPUT_REQUIRED");
+    const category = String(args.category ?? "business").trim().slice(0, 60) || "business";
+    const { data, error } = await admin.from("workspace_memories").upsert({
+      organization_id: context.organizationId,
+      user_id: context.userId,
+      memory_key: key,
+      memory_value: { text: value },
+      category,
+      source: "conversation",
+      confidence: 1,
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "organization_id,memory_key" }).select("id,memory_key,memory_value,category,source,is_active,updated_at").single();
+    if (error || !data) throw new Error("MEMORY_SAVE_FAILED");
+    await Promise.all([
+      recordUsage({ organizationId: context.organizationId, userId: context.userId, eventType: "memory_saved", metadata: { memory_id: data.id, memory_key: data.memory_key } }),
+      admin.from("audit_events").insert({ organization_id: context.organizationId, actor_user_id: context.userId, source: "assistant", tool_name: name, resource_type: "workspace_memory", operation: "upsert", result: "success", metadata: { memory_id: data.id, memory_key: data.memory_key, conversation_id: context.conversationId } }),
+    ]);
+    return { saved: true, memory: data };
+  }
+
+  if (name === "forget_memory") {
+    const key = normalizeMemoryKey(args.key);
+    if (!key) throw new Error("MEMORY_KEY_REQUIRED");
+    const { data, error } = await admin.from("workspace_memories")
+      .delete()
+      .eq("organization_id", context.organizationId)
+      .eq("memory_key", key)
+      .select("id,memory_key")
+      .maybeSingle();
+    if (error) throw new Error("MEMORY_DELETE_FAILED");
+    if (!data) return { deleted: false, reason: "MEMORY_NOT_FOUND", key };
+    await Promise.all([
+      recordUsage({ organizationId: context.organizationId, userId: context.userId, eventType: "memory_deleted", metadata: { memory_id: data.id, memory_key: data.memory_key } }),
+      admin.from("audit_events").insert({ organization_id: context.organizationId, actor_user_id: context.userId, source: "assistant", tool_name: name, resource_type: "workspace_memory", operation: "delete", result: "success", metadata: { memory_id: data.id, memory_key: data.memory_key, conversation_id: context.conversationId } }),
+    ]);
+    return { deleted: true, key: data.memory_key };
   }
 
   if (name === "search_gmail") {
