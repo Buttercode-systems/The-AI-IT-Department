@@ -1,5 +1,6 @@
 import "./styles.css";
 import "./approval.css";
+import "./legal.css";
 import ApprovalDock from "./approval-dock";
 
 export const metadata = {
