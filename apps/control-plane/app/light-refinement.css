@@ -28,8 +28,9 @@ body {
 .assistant-mark,
 .message.assistant::before,
 .loading-mark {
-  background: linear-gradient(145deg, #3f73ff 0%, #2455dc 100%);
-  box-shadow: 0 10px 24px rgba(47,102,246,.18);
+  background: linear-gradient(145deg, #25282e 0%, #090a0c 100%);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(17,24,39,.16);
 }
 
 .wordmark strong {
@@ -176,12 +177,13 @@ body {
 }
 
 .composer button {
-  background: var(--aid-blue);
+  background: #17191e;
+  color: #fff;
   box-shadow: none;
 }
 
 .composer button:not(:disabled):hover {
-  background: #2558dc;
+  background: #050608;
 }
 
 .composer-wrap > small {
@@ -255,7 +257,8 @@ body {
   }
 
   .composer button {
-    background: var(--aid-blue) !important;
+    background: #17191e !important;
+    color: #fff !important;
   }
 
   .mobile-nav-sheet,
