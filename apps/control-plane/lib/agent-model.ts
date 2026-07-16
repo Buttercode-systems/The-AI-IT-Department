@@ -13,22 +13,40 @@ type Completion = {
   error?: { message?: string };
 };
 
+function modelConfig() {
+  const gatewayToken = process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
+  if (gatewayToken) {
+    return {
+      apiKey: gatewayToken,
+      baseUrl: "https://ai-gateway.vercel.sh/v1",
+      model: process.env.AI_MODEL || "openai/gpt-5.5",
+    };
+  }
+
+  const openAiKey = process.env.OPENAI_API_KEY;
+  if (!openAiKey) throw new Error("MODEL_PROVIDER_NOT_CONFIGURED");
+  return {
+    apiKey: openAiKey,
+    baseUrl: "https://api.openai.com/v1",
+    model: process.env.OPENAI_MODEL || "gpt-5.5",
+  };
+}
+
 export function agentModelName() {
-  return process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  try { return modelConfig().model; }
+  catch { return process.env.AI_MODEL || process.env.OPENAI_MODEL || "openai/gpt-5.5"; }
 }
 
 export async function completeAgent(messages: AgentMessage[]) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY_MISSING");
-
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const config = modelConfig();
+  const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${apiKey}`,
+      authorization: `Bearer ${config.apiKey}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: agentModelName(),
+      model: config.model,
       messages,
       tools: agentTools,
       tool_choice: "auto",
