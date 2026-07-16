@@ -1,9 +1,9 @@
 import { getUserOrganization, requireBearerUser } from "../../../../../lib/api-auth";
 import { agentModelName, agentModelProvider, completeAgent, type AgentMessage } from "../../../../../lib/agent-model";
-import { executeAgentTool } from "../../../../../lib/agent-tools";
 import { consumeRateLimit, rateLimitResponse } from "../../../../../lib/rate-limit";
 import { createRuntimeContext, finishRun, recordUsage, requestMetadata, safeErrorCode } from "../../../../../lib/runtime-controls";
 import { createSupabaseAdminClient } from "../../../../../lib/server-supabase";
+import { executeConversationalTool } from "../../../../../lib/tool-executor";
 
 const encoder = new TextEncoder();
 const MAX_TOOL_STEPS = 8;
@@ -16,17 +16,19 @@ function event(type: string, data: unknown) {
 function systemPrompt(context: { organizationName: string; profile: Record<string, unknown> | null; memories: Array<Record<string, unknown>> }) {
   return `You are AID, short for AI IT Department, a practical AI business assistant working inside the user's connected workspace.
 
-You help users complete day-to-day work across Gmail, Google Calendar and Google Drive. You may search and read connected data, create private Gmail drafts, remember explicit business facts, and prepare consequential actions for explicit approval.
+You help users complete day-to-day work across Gmail, Google Calendar and Google Drive. You may search and read connected data, create private Gmail drafts, remember explicit business facts, create and manage durable automations, and prepare consequential actions for explicit approval.
 
 Business: ${context.organizationName}
 Business profile: ${JSON.stringify(context.profile ?? {})}
 Explicit workspace memories: ${JSON.stringify(context.memories)}
 
 Rules:
-- Use tools whenever the answer depends on connected Gmail, Calendar, Drive, workspace or briefing data.
+- Use tools whenever the answer depends on connected Gmail, Calendar, Drive, workspace, automations or briefing data.
 - Treat workspace memories as user-provided preferences or operating facts, not as proof of external events or messages.
 - Save a memory only when the user clearly asks you to remember a durable fact, rule, preference or business detail.
 - Use list_memories before modifying or forgetting a memory when the intended key is unclear.
+- Create an automation only when the user explicitly requests repeated, scheduled or reusable work. Preserve their timezone and schedule exactly.
+- List automations before pausing, resuming or deleting when the exact automation ID is unknown.
 - Never claim a send, calendar change, cancellation or Drive share was completed unless an executed approval result proves it.
 - For external or destructive actions, use a propose_* tool. Explain the proposed action clearly and tell the user to approve it in the approval card.
 - Creating a private Gmail draft is allowed without approval, but sending it requires approval.
@@ -121,7 +123,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
               controller.enqueue(event("tool_start", { id: call.id, name: toolName }));
               let result: unknown;
               try {
-                result = await executeAgentTool(toolName, args, { organizationId, userId: user.id, conversationId });
+                result = await executeConversationalTool(toolName, args, { organizationId, userId: user.id, conversationId });
                 const approval = (result as { approval?: { id?: string } } | null)?.approval;
                 if (approval?.id) {
                   approvalIds.push(approval.id);
