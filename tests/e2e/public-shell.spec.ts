@@ -8,13 +8,15 @@ async function expectNoHorizontalOverflow(page: import("@playwright/test").Page)
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth + 1);
 }
 
-test.describe("AID public command centre", () => {
+test.describe("AID desktop command centre", () => {
+  test.skip(({ isMobile }) => Boolean(isMobile), "Desktop interaction coverage");
+
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Your AI IT Department" })).toBeVisible();
   });
 
-  test("desktop home is clear, keyboard reachable and stable", async ({ page }, testInfo) => {
+  test("home is clear, keyboard reachable and stable", async ({ page }, testInfo) => {
     await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Message AID" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Send message" })).toBeDisabled();
@@ -33,8 +35,7 @@ test.describe("AID public command centre", () => {
   test("authentication dialog opens, exposes named controls and closes safely", async ({ page }) => {
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    const dialog = page.getByRole("heading", { name: "Welcome back" }).locator("..");
-    await expect(dialog).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
     await expect(page.getByPlaceholder("Email address")).toHaveAttribute("autocomplete", "email");
     await expect(page.getByPlaceholder("Password")).toHaveAttribute("autocomplete", "current-password");
@@ -52,13 +53,15 @@ test.describe("AID public command centre", () => {
   });
 });
 
-test.describe("AID mobile shell", () => {
+test.describe("AID mobile command centre", () => {
   test.skip(({ isMobile }) => !isMobile, "Mobile interaction coverage");
 
-  test("conversation sheet provides a complete escape and navigation path", async ({ page }, testInfo) => {
+  test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Your AI IT Department" })).toBeVisible();
+  });
 
+  test("conversation sheet provides a complete escape and navigation path", async ({ page }, testInfo) => {
     const history = page.getByRole("button", { name: "Open conversations" });
     await expect(history).toBeVisible();
     await expect(history).toHaveAttribute("aria-expanded", "false");
@@ -79,8 +82,17 @@ test.describe("AID mobile shell", () => {
     await expect(sheet).toBeHidden();
   });
 
-  test("mobile controls meet release touch-target minimums", async ({ page }) => {
-    await page.goto("/");
+  test("authentication remains reachable through the mobile navigation model", async ({ page }) => {
+    await page.getByRole("button", { name: "Open conversations" }).click();
+    const sheet = page.getByRole("dialog", { name: "Conversations" });
+    await sheet.getByRole("button", { name: "Sign in" }).click();
+
+    await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close" })).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("primary controls meet the 44-point release touch-target minimum", async ({ page }) => {
     const controls = [
       page.getByRole("button", { name: "Open conversations" }),
       page.getByRole("button", { name: "Settings" }),
@@ -90,8 +102,8 @@ test.describe("AID mobile shell", () => {
     for (const control of controls) {
       const box = await control.boundingBox();
       expect(box, "control should be rendered").not.toBeNull();
-      expect(box!.width).toBeGreaterThanOrEqual(40);
-      expect(box!.height).toBeGreaterThanOrEqual(40);
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
     }
 
     await expectNoHorizontalOverflow(page);
