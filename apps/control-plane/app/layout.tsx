@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./chat-v2.css";
 import "./approval.css";
 import "./legal.css";
 import "./manage.css";
