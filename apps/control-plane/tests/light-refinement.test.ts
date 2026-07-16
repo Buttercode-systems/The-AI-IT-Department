@@ -18,9 +18,18 @@ test("refinement stays light and improves core interaction surfaces", async () =
   const styles = await readFile(stylesPath, "utf8");
 
   assert.match(styles, /color-scheme:\s*light/);
+  assert.match(styles, /html,\s*body[\s\S]*background:\s*#f7f8fb/);
   assert.match(styles, /\.starter-grid button:nth-child\(1\)::before/);
   assert.match(styles, /\.composer:focus-within/);
   assert.match(styles, /\.thread-list button\.active/);
   assert.match(styles, /@media \(max-width: 820px\)/);
-  assert.doesNotMatch(styles, /background:\s*#0[0-9a-f]{2,5}/i);
+});
+
+test("AID identity marks and send controls remain monochrome", async () => {
+  const styles = await readFile(stylesPath, "utf8");
+
+  assert.match(styles, /\.wordmark span,[\s\S]*background:\s*linear-gradient\(145deg, #25282e 0%, #090a0c 100%\)/);
+  assert.match(styles, /\.composer button \{[\s\S]*background:\s*#17191e;[\s\S]*color:\s*#fff;/);
+  assert.match(styles, /@media \(max-width: 820px\)[\s\S]*\.composer button \{[\s\S]*background:\s*#17191e !important;[\s\S]*color:\s*#fff !important;/);
+  assert.doesNotMatch(styles, /\.composer button \{[\s\S]{0,120}background:\s*var\(--aid-blue\)/);
 });
