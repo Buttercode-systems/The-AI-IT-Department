@@ -17,8 +17,9 @@ function parts(date: Date, timeZone: string) {
     hourCycle: "h23",
     weekday: "short",
   });
-  const values = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value]));
+  const values = Object.fromEntries(formatter.formatToParts(date).map((part) => [part.type, part.value])) as Record<string, string>;
   const weekdays: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const weekdayName = values.weekday ?? "";
   return {
     year: Number(values.year),
     month: Number(values.month),
@@ -26,7 +27,7 @@ function parts(date: Date, timeZone: string) {
     hour: Number(values.hour),
     minute: Number(values.minute),
     second: Number(values.second),
-    weekday: weekdays[values.weekday] ?? 0,
+    weekday: weekdays[weekdayName] ?? 0,
   };
 }
 
