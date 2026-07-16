@@ -6,6 +6,7 @@ import "./approval.css";
 import "./legal.css";
 import "./manage.css";
 import "./light-refinement.css";
+import "./responsive-hardening.css";
 import ApprovalDock from "./approval-dock";
 import ManageLauncher from "./manage-launcher";
 
