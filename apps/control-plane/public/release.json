@@ -1,0 +1,12 @@
+{
+  "product": "AID",
+  "release": "production-readiness-2026-07-16",
+  "includes": [
+    "reliability-and-observability",
+    "durable-memory",
+    "scheduled-automations",
+    "account-controls",
+    "data-export",
+    "privacy-terms-and-deletion"
+  ]
+}
