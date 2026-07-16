@@ -11,7 +11,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,3 +52,20 @@ jobs:
       - name: Fail on build error
         if: steps.build.outcome == 'failure'
         run: exit 1
+      - name: Install browser runtime
+        run: npx playwright install --with-deps chromium
+      - name: Browser release QA
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://amcjrmhmrentzgxyohlm.supabase.co
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_otK-GHV9du5xWWodgCAP9Q_xrgfU_vs
+        run: npm run test:e2e
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-release-qa
+          path: |
+            playwright-report
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
