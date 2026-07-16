@@ -1,4 +1,5 @@
 import { agentTools } from "./agent-tools";
+import { automationAgentTools } from "./automation-agent-tools";
 
 export type AgentMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -85,7 +86,7 @@ export async function completeAgent(messages: AgentMessage[]) {
         body: JSON.stringify({
           model: config.model,
           messages: providerMessages,
-          tools: agentTools,
+          tools: [...agentTools, ...automationAgentTools],
           tool_choice: "auto",
           temperature: 0.2,
         }),
