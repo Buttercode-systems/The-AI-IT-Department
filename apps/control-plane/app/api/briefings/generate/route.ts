@@ -3,6 +3,7 @@ import { getUserOrganization, requireBearerUser } from "../../../../lib/api-auth
 import { getGoogleAccessToken, getGoogleConnection, googleJson } from "../../../../lib/google-connection";
 import { createSupabaseAdminClient } from "../../../../lib/server-supabase";
 
+type Priority = "urgent" | "high" | "normal" | "low";
 type GmailList = { messages?: Array<{ id: string; threadId?: string }> };
 type GmailMessage = {
   id: string;
@@ -17,7 +18,7 @@ function header(message: GmailMessage, name: string) {
   return message.payload?.headers?.find((item) => item.name.toLowerCase() === name.toLowerCase())?.value ?? "";
 }
 
-function priorityFor(subject: string, snippet: string) {
+function priorityFor(subject: string, snippet: string): Priority {
   const text = `${subject} ${snippet}`.toLowerCase();
   if (/urgent|asap|overdue|final notice|today|immediately|deadline/.test(text)) return "urgent";
   if (/invoice|quote|approval|confirm|follow up|follow-up|payment|meeting|tomorrow/.test(text)) return "high";
@@ -38,7 +39,6 @@ export async function POST(request: Request) {
     const user = await requireBearerUser(request);
     const organizationId = await getUserOrganization(user.id);
     const admin = createSupabaseAdminClient();
-
     const connection = await getGoogleConnection(organizationId);
     const accessToken = await getGoogleAccessToken(connection);
     const now = new Date();
@@ -48,10 +48,7 @@ export async function POST(request: Request) {
       googleJson(accessToken, "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=12&q=is%3Aunread%20newer_than%3A14d"),
       googleJson(accessToken, `https://www.googleapis.com/calendar/v3/calendars/primary/events?singleEvents=true&orderBy=startTime&maxResults=8&timeMin=${encodeURIComponent(now.toISOString())}&timeMax=${encodeURIComponent(end.toISOString())}`),
     ]);
-
-    if (!mailListResponse.ok || !calendarResponse.ok) {
-      return NextResponse.json({ error: "GOOGLE_BRIEFING_FETCH_FAILED" }, { status: 502 });
-    }
+    if (!mailListResponse.ok || !calendarResponse.ok) return NextResponse.json({ error: "GOOGLE_BRIEFING_FETCH_FAILED" }, { status: 502 });
 
     const mailList = mailListResponse.body as GmailList;
     const messages = await Promise.all((mailList.messages ?? []).slice(0, 10).map(async ({ id }) => {
@@ -64,7 +61,7 @@ export async function POST(request: Request) {
       const sender = header(message, "From") || "Unknown sender";
       const snippet = (message.snippet ?? "").replace(/\s+/g, " ").trim();
       return {
-        item_type: "email",
+        item_type: "email" as const,
         priority: priorityFor(subject, snippet),
         title: subject,
         summary: snippet.slice(0, 260),
@@ -80,9 +77,10 @@ export async function POST(request: Request) {
     const calendar = calendarResponse.body as CalendarList;
     const calendarItems = (calendar.items ?? []).map((event) => {
       const startsAt = event.start?.dateTime ?? event.start?.date ?? null;
+      const priority: Priority = startsAt && new Date(startsAt).getTime() - now.getTime() < 6 * 60 * 60 * 1000 ? "high" : "normal";
       return {
-        item_type: "calendar",
-        priority: startsAt && new Date(startsAt).getTime() - now.getTime() < 6 * 60 * 60 * 1000 ? "high" : "normal",
+        item_type: "calendar" as const,
+        priority,
         title: event.summary || "Calendar event",
         summary: (event.description ?? "Upcoming event in your primary calendar.").replace(/\s+/g, " ").slice(0, 260),
         reason: "Upcoming event within the next 48 hours.",
@@ -94,10 +92,10 @@ export async function POST(request: Request) {
       };
     });
 
-    const allItems = [...emailItems, ...calendarItems].sort((a, b) => {
-      const order: Record<string, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
-      return order[a.priority] - order[b.priority];
-    }).slice(0, 15);
+    const priorityOrder: Record<Priority, number> = { urgent: 0, high: 1, normal: 2, low: 3 };
+    const allItems = [...emailItems, ...calendarItems]
+      .sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority])
+      .slice(0, 15);
 
     const summary = allItems.length
       ? `${allItems.filter((item) => item.priority === "urgent" || item.priority === "high").length} priority items from ${emailItems.length} unread emails and ${calendarItems.length} upcoming events.`
