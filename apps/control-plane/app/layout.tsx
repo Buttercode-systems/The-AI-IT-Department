@@ -5,12 +5,13 @@ import "./mobile-release.css";
 import "./approval.css";
 import "./legal.css";
 import "./manage.css";
+import "./product-language.css";
 import ApprovalDock from "./approval-dock";
 import ManageLauncher from "./manage-launcher";
 
 export const metadata = {
   title: "AID — AI IT Department",
-  description: "A conversational AI assistant for your connected business workspace.",
+  description: "A calm command centre for delegating work across your connected business workspace.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
