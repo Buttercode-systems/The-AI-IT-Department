@@ -29,11 +29,12 @@ export async function GET() {
 
   const googleConfigured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
   const encryptionConfigured = Boolean(process.env.TOKEN_ENCRYPTION_KEY);
-  const ready = Boolean(modelProvider && databaseReachable && googleConfigured && encryptionConfigured);
+  const schedulerConfigured = Boolean(process.env.CRON_SECRET);
+  const coreReady = Boolean(modelProvider && databaseReachable && googleConfigured && encryptionConfigured);
 
   return Response.json(
     {
-      status: ready ? "ready" : "degraded",
+      status: coreReady ? "ready" : "degraded",
       checked_at: checkedAt,
       model_provider_configured: Boolean(modelProvider),
       model_provider: modelProvider,
@@ -41,9 +42,11 @@ export async function GET() {
       database_reachable: databaseReachable,
       google_oauth_configured: googleConfigured,
       token_encryption_configured: encryptionConfigured,
+      scheduler_configured: schedulerConfigured,
+      scheduler_status: schedulerConfigured ? "ready" : "disabled",
       release: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ?? "local",
       environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? "unknown",
     },
-    { status: ready ? 200 : 503, headers: { "cache-control": "no-store" } },
+    { status: coreReady ? 200 : 503, headers: { "cache-control": "no-store" } },
   );
 }
