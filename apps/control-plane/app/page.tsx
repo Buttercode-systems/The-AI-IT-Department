@@ -71,6 +71,33 @@ export default function HomePage() {
     else setWorkspace(Array.isArray(data) ? data[0] : data);
   }
 
+  async function connectGoogle() {
+    setBusy(true);
+    setMessage("");
+
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (sessionError || !accessToken) {
+      setBusy(false);
+      setMessage("Your session has expired. Sign in again.");
+      return;
+    }
+
+    const response = await fetch("/api/connect/google", {
+      method: "POST",
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    const result = (await response.json()) as { url?: string; error?: string };
+
+    if (!response.ok || !result.url) {
+      setBusy(false);
+      setMessage(result.error ?? "Could not start Google connection.");
+      return;
+    }
+
+    window.location.assign(result.url);
+  }
+
   async function signOut() {
     await supabase.auth.signOut();
     setWorkspace(null);
@@ -126,7 +153,9 @@ export default function HomePage() {
           {googleConnected ? (
             <button disabled>Google connected</button>
           ) : (
-            <a className={`button-link${workspace?.profile_complete ? "" : " disabled"}`} href={workspace?.profile_complete ? "/api/connect/google" : undefined}>Connect Google</a>
+            <button disabled={!workspace?.profile_complete || busy} onClick={connectGoogle}>
+              {busy ? "Opening Google…" : "Connect Google"}
+            </button>
           )}
         </section>
 
