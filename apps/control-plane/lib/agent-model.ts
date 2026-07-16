@@ -1,4 +1,5 @@
 import { agentTools } from "./agent-tools";
+import { automationAgentTools } from "./automation-agent-tools";
 
 export type AgentMessage = {
   role: "system" | "user" | "assistant" | "tool";
@@ -65,11 +66,12 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function completeAgent(messages: AgentMessage[]) {
+export async function completeAgent(messages: AgentMessage[], options: { includeAutomationTools?: boolean } = {}) {
   const config = modelConfig();
   const providerMessages = config.provider === "groq"
     ? messages.map(({ name: _name, ...message }) => message)
     : messages;
+  const tools = options.includeAutomationTools === false ? agentTools : [...agentTools, ...automationAgentTools];
 
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -85,7 +87,7 @@ export async function completeAgent(messages: AgentMessage[]) {
         body: JSON.stringify({
           model: config.model,
           messages: providerMessages,
-          tools: agentTools,
+          tools,
           tool_choice: "auto",
           temperature: 0.2,
         }),
