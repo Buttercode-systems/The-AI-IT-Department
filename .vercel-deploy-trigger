@@ -1,2 +1,5 @@
-Phase 1 QA production deployment - 2026-07-17 07:27:19Z
-Commit: 85ec656b39878c637c7c5c353198d3f8071a24c5
+Phase 3 & 4 production deployment - 2026-07-17 07:32:14Z
+Commit: 6731fc0052f54577ebbfcf4cc51fa495f3bf91e0
+
+Landing page redesign + UX polish complete.
+Vercel build trigger: FORCE_REBUILD=true
