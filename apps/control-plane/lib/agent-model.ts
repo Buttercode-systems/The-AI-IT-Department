@@ -66,7 +66,7 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function completeAgent(messages: AgentMessage[], options: { includeAutomationTools?: boolean } = {}) {
+export async function completeAgent(messages: AgentMessage[], options: { includeAutomationTools?: boolean; signal?: AbortSignal } = {}) {
   const config = modelConfig();
   const providerMessages = config.provider === "groq"
     ? messages.map(({ name: _name, ...message }) => message)
@@ -76,6 +76,8 @@ export async function completeAgent(messages: AgentMessage[], options: { include
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController();
+    const abortForRequest = () => controller.abort();
+    options.signal?.addEventListener("abort", abortForRequest, { once: true });
     const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
       const response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -109,6 +111,7 @@ export async function completeAgent(messages: AgentMessage[], options: { include
       }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
+        if (options.signal?.aborted) throw new Error("REQUEST_CANCELLED");
         if (attempt === maxAttempts) throw new Error("MODEL_TIMEOUT");
       } else if (error instanceof Error && ["MODEL_EMPTY_RESPONSE", "MODEL_RATE_LIMITED", "MODEL_REQUEST_FAILED"].includes(error.message)) {
         throw error;
@@ -117,6 +120,7 @@ export async function completeAgent(messages: AgentMessage[], options: { include
       }
     } finally {
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abortForRequest);
     }
     await wait(250 * 2 ** (attempt - 1));
   }
