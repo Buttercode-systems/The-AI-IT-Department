@@ -586,3 +586,22 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Request lifecycle states stay inside the assistant response position to avoid layout jumps. */
+.response-state { min-height: 74px; }
+.response-status { color: #666c76 !important; }
+.response-status::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 10px; border-radius: 50%; background: #2e333b; animation: aid-status-pulse 1s ease-in-out infinite alternate; }
+.operation-card, .approval-inline, .recovery-panel { margin-top: 12px; border: 1px solid #e1e4e9; border-radius: 12px; padding: 11px 13px; color: #424851; font-size: .84rem; line-height: 1.45; }
+.operation-card { display: flex; align-items: center; gap: 9px; background: #fafbfc; }
+.operation-card span { width: 18px; text-align: center; font-weight: 800; }
+.operation-card.running span { animation: aid-status-pulse 800ms ease-in-out infinite alternate; }
+.operation-card.error { border-color: #f1c3bd; color: #9d3327; }
+.approval-inline { background: #fff9ed; border-color: #eed89d; }
+.approval-inline strong, .recovery-panel strong { display: block; color: #252931; }
+.approval-inline p, .recovery-panel p { margin: 4px 0 0; font-size: .84rem; }
+.recovery-panel { background: #fff8f7; border-color: #f0c4be; }
+.recovery-panel button, .message-actions button { margin: 10px 8px 0 0; border: 1px solid #d7dbe2; background: #fff; border-radius: 8px; padding: 6px 9px; color: #3d434d; font-size: .76rem; font-weight: 650; }
+.recovery-panel button:first-of-type { background: #17191e; color: #fff; border-color: #17191e; }
+.message-actions { display: flex; flex-wrap: wrap; opacity: .78; }
+.message-actions button { margin-top: 12px; }
+@keyframes aid-status-pulse { to { opacity: .3; transform: scale(.8); } }
