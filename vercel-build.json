@@ -1,0 +1,6 @@
+{
+  "buildCommand": "bash build.sh",
+  "installCommand": "npm ci --prefer-offline --no-audit",
+  "outputDirectory": "apps/control-plane/.next",
+  "framework": "nextjs"
+}
