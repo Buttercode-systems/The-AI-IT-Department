@@ -13,7 +13,7 @@ type LiveStatus = {
   capability: { status: string } | null;
 };
 type Profile = { business_type?: string; user_role?: string; timezone?: string; communication_style?: string; operating_context?: Record<string, string | null>; onboarding_completed_at?: string | null };
-type View = "landing" | "chat" | "settings";
+type View = "chat" | "settings";
 type AuthMode = "signin" | "signup";
 
 const REQUIRED_EXECUTION_SCOPES = [
@@ -38,7 +38,7 @@ export default function HomePage() {
   const [authReady, setAuthReady] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
-  const [view, setView] = useState<View>("landing");
+  const [view, setView] = useState<View>("chat");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [status, setStatus] = useState<LiveStatus>({ connection: null, latestTest: null, capability: null });
@@ -247,7 +247,7 @@ export default function HomePage() {
     finally { setBusy(null); }
   }
 
-  async function signOut() { setMobileNavOpen(false); await supabase.auth.signOut(); setView("landing"); }
+  async function signOut() { setMobileNavOpen(false); await supabase.auth.signOut(); setView("chat"); }
 
   const connected = status.connection?.status === "connected" || status.connection?.status === "error";
   const scopes = status.connection?.granted_scopes ?? [];
@@ -260,21 +260,6 @@ export default function HomePage() {
     : "Connect Google Workspace when you are ready. AID can then work across Gmail, Calendar and Drive through conversation.";
 
   if (!authReady) return <main className="loading"><span className="loading-mark">AID</span><span>Preparing your workspace…</span></main>;
-
-  if (!user && view === "landing") return (
-    <main className="landing-shell">
-      <header className="landing-nav"><button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}><span>AID</span><strong>AI IT Department</strong></button><nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#security">Security</a><a href="#pricing">Pricing</a></nav><div className="landing-actions"><button className="landing-signin" onClick={() => { setAuthMode("signin"); setShowAuth(true); }}>Sign in</button><button className="landing-primary" onClick={() => { setAuthMode("signup"); setShowAuth(true); }}>Start free</button></div></header>
-      <section className="landing-hero" aria-labelledby="landing-title"><div className="hero-copy"><p className="eyebrow">AI IT Department</p><h1 id="landing-title">Stop managing work.<br />Start delegating it.</h1><p>Meet AID, an AI employee that understands your Google Workspace and gets the next thing moving—through a conversation.</p><div className="hero-actions"><button className="landing-primary" onClick={() => { setAuthMode("signup"); setShowAuth(true); }}>Start free <span>→</span></button><a className="landing-secondary" href="#conversation">Watch a walkthrough <span>↓</span></a></div><small>No credit card required. Disconnect anytime.</small></div><div className="hero-preview" aria-label="AID conversation preview"><div className="preview-bar"><span className="preview-dot" /><strong>AID</strong><small>Ready to help</small></div><div className="preview-body"><div className="preview-message user">Summarise unread emails</div><div className="preview-message assistant"><span className="preview-avatar">AID</span><div><strong>Done.</strong><p>You have 12 unread messages. Three need your attention today.</p><button onClick={() => { setDraft("Draft replies to the three emails that need my attention."); setShowAuth(true); }}>Draft replies <span>→</span></button></div></div><div className="preview-activity"><i /> Reviewing your inbox and calendar</div></div></div></section>
-      <section className="trust-row" aria-label="Built with trusted infrastructure"><span>Google Workspace</span><span>Groq</span><span>Supabase</span><span>Secure OAuth</span><span>Encrypted</span></section>
-      <section id="how-it-works" className="landing-section process"><div className="section-intro"><p className="eyebrow">How it works</p><h2>One calm place for work to move forward.</h2></div><div className="process-grid"><article><span>01</span><h3>Connect</h3><p>Bring Google Workspace into AID with a secure, familiar sign-in.</p></article><article><span>02</span><h3>Ask</h3><p>Describe the outcome you need, naturally. AID keeps the context.</p></article><article><span>03</span><h3>Done</h3><p>AID finds, drafts and prepares work—with approval for important changes.</p></article></div></section>
-      <section className="landing-section capabilities"><div className="section-intro"><p className="eyebrow">What AID can handle</p><h2>Useful from the first conversation.</h2><p>Delegate the work around your work without learning a new system.</p></div><div className="capability-grid">{["Email", "Calendar", "Drive", "Docs", "Scheduling", "Drafting", "Summaries", "Search", "Automation"].map((capability) => <div key={capability}>{capability}<span>↗</span></div>)}</div></section>
-      <section id="conversation" className="landing-section conversation-section"><div className="conversation-copy"><p className="eyebrow">A conversation, not a dashboard</p><h2>Give AID the outcome. Keep control of the action.</h2><p>It can read across your connected work, explain what it found and ask before anything leaves your hands.</p><button className="text-button" onClick={() => { setDraft("What needs my attention today?"); setShowAuth(true); }}>Ask AID what needs attention <span>→</span></button></div><div className="conversation-card"><div className="preview-message user">What needs my attention today?</div><div className="preview-message assistant"><span className="preview-avatar">AID</span><div><strong>Three things stand out.</strong><ol><li>Reply to the Northstar contract question.</li><li>Confirm tomorrow’s 10:30 meeting.</li><li>Review the proposal shared this morning.</li></ol><p>I can prepare the next steps for your review.</p></div></div></div></section>
-      <section id="security" className="landing-section security"><div><p className="eyebrow">Designed for trust</p><h2>Your work stays yours.</h2><p>AID connects using secure OAuth, encrypts credentials and puts you in charge of every permission. You can disconnect at any time.</p></div><ul><li><strong>OAuth, not passwords</strong><span>Connect with the provider you already trust.</span></li><li><strong>Encryption by default</strong><span>Credentials are protected at rest and in transit.</span></li><li><strong>Approval where it matters</strong><span>External and destructive actions wait for you.</span></li></ul></section>
-      <section id="pricing" className="landing-section pricing"><div className="section-intro"><p className="eyebrow">Simple pricing</p><h2>Start with the work in front of you.</h2></div><div className="price-grid"><article><h3>Free</h3><p>For getting to know AID.</p><strong>$0 <small>/ month</small></strong><button onClick={() => { setAuthMode("signup"); setShowAuth(true); }}>Start free</button></article><article className="price-featured"><p className="plan-label">Most useful</p><h3>Pro</h3><p>For individuals ready to delegate daily work.</p><strong>$24 <small>/ month</small></strong><button onClick={() => { setAuthMode("signup"); setShowAuth(true); }}>Start free</button></article><article><h3>Business</h3><p>For teams that want a shared AI employee.</p><strong>Let’s talk</strong><a href="mailto:hello@aid.work">Contact us</a></article></div></section>
-      <footer className="landing-footer"><div className="landing-brand"><span>AID</span><strong>AI IT Department</strong></div><p>Work, delegated.</p><div><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/data-deletion">Data deletion</a></div></footer>
-      {showAuth && <div className="modal-backdrop" onMouseDown={() => setShowAuth(false)}><section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" onMouseDown={(e) => e.stopPropagation()}><button className="modal-close" aria-label="Close" onClick={() => setShowAuth(false)}>×</button><h2 id="auth-title">{authMode === "signup" ? "Create your AID workspace" : "Welcome back"}</h2><p>Sign in when you are ready to connect your work. Your session stays active on this device.</p><button className="google-button" onClick={() => void continueWithGoogle()} disabled={busy === "google-auth"}>Continue with Google</button><div className="divider"><span>or</span></div><form onSubmit={authenticate}><input type="email" required autoComplete="email" placeholder="Email address" value={email} onChange={(e) => setEmail(e.target.value)} /><input type="password" required minLength={8} autoComplete={authMode === "signup" ? "new-password" : "current-password"} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} /><button className="auth-primary" disabled={busy === "auth"}>{busy === "auth" ? "Please wait…" : authMode === "signup" ? "Create account" : "Sign in"}</button></form><button className="switch-auth" onClick={() => setAuthMode(authMode === "signin" ? "signup" : "signin")}>{authMode === "signin" ? "New here? Create an account" : "Already have an account? Sign in"}</button>{notice && <p className="auth-notice">{notice}</p>}</section></div>}
-    </main>
-  );
 
   return (
     <main className="chat-app">
