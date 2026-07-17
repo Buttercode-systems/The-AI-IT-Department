@@ -7,35 +7,6 @@ import { createSupabaseBrowserClient } from "../lib/supabase";
 type Workspace = { organization_id: string; organization_name: string; profile_complete: boolean };
 type Conversation = { id: string; title: string; created_at: string; updated_at: string };
 type ChatMessage = { id: string; role: "user" | "assistant" | "tool" | "system"; content: string; created_at: string };
-type RequestState = "submitted" | "processing" | "tool" | "approval" | "streaming" | "ready" | "error" | "cancelled";
-type ToolPart = { id: string; name: string; status: "running" | "success" | "error" };
-type ActiveRun = {
-  id: string;
-  request: string;
-  state: RequestState;
-  status: string;
-  tools: ToolPart[];
-  content: string;
-};
-
-const toolLabels: Record<string, string> = {
-  search_gmail: "Searching Gmail",
-  get_gmail_thread: "Reading a Gmail conversation",
-  create_gmail_draft: "Preparing a Gmail draft",
-  list_calendar_events: "Checking Calendar availability",
-  search_drive: "Searching Drive",
-  read_drive_file: "Loading a Drive file",
-  get_latest_briefing: "Loading your latest briefing",
-  propose_send_email: "Preparing an email for approval",
-  propose_create_calendar_event: "Preparing a calendar action for approval",
-  propose_update_calendar_event: "Preparing a calendar action for approval",
-  propose_delete_calendar_event: "Preparing a calendar action for approval",
-  propose_share_drive_file: "Preparing file sharing for approval",
-};
-
-function toolLabel(name: string) {
-  return toolLabels[name] ?? `Using ${name.replaceAll("_", " ")}`;
-}
 type LiveStatus = {
   connection: { status: string; provider_account_label?: string; granted_scopes?: string[] } | null;
   latestTest: { status: string; scopes_ok?: boolean; details?: { drive_ok?: boolean; missing_scopes?: string[] } } | null;
@@ -63,7 +34,6 @@ const starters = [
 export default function HomePage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const activeRequestRef = useRef<AbortController | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [showAuth, setShowAuth] = useState(false);
@@ -88,7 +58,7 @@ export default function HomePage() {
   const [workingHours, setWorkingHours] = useState("");
   const [importantRules, setImportantRules] = useState("");
   const [notice, setNotice] = useState("");
-  const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
+  const [runStatus, setRunStatus] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -104,7 +74,7 @@ export default function HomePage() {
   }, [supabase]);
 
   useEffect(() => { if (user) void bootstrap(); else resetPrivateState(); }, [user]);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, activeRun]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, runStatus]);
   useEffect(() => {
     if (!mobileNavOpen) return;
     const close = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setMobileNavOpen(false); };
@@ -120,7 +90,7 @@ export default function HomePage() {
   function returnToChatHome() {
     setActiveConversationId(null);
     setMessages([]);
-    setActiveRun(null);
+    setRunStatus("");
     setView("chat");
     setMobileNavOpen(false);
   }
@@ -180,116 +150,46 @@ export default function HomePage() {
     setActiveConversationId(result.conversation.id); setMessages([]); setView("chat");
   }
 
-  function updateActiveRun(update: Partial<ActiveRun>) {
-    setActiveRun((current) => current ? { ...current, ...update } : current);
-  }
-
   async function sendMessage(text = draft) {
     const clean = text.trim();
-    if (!clean || activeRequestRef.current) return;
+    if (!clean) return;
     if (!user) { setDraft(clean); setShowAuth(true); return; }
-
-    const optimisticUserMessage: ChatMessage = { id: `pending-user-${crypto.randomUUID()}`, role: "user", content: clean, created_at: new Date().toISOString() };
-    const runId = crypto.randomUUID();
-    const controller = new AbortController();
-    activeRequestRef.current = controller;
-    setMessages((current) => [...current, optimisticUserMessage]);
-    setActiveRun({ id: runId, request: clean, state: "submitted", status: "Starting…", tools: [], content: "" });
-    setBusy("chat");
-    setDraft("");
-
+    setBusy("chat"); setRunStatus("Understanding your request…"); setDraft("");
     try {
       let conversationId = activeConversationId;
       if (!conversationId) {
         const created = await api<{ conversation: Conversation }>("/api/conversations", "POST", {});
-        conversationId = created.conversation.id;
-        setActiveConversationId(conversationId);
-        setConversations((current) => [created.conversation, ...current]);
+        conversationId = created.conversation.id; setActiveConversationId(conversationId); setConversations((current) => [created.conversation, ...current]);
       }
-      updateActiveRun({ state: "processing", status: "Understanding your request" });
       const response = await fetch(`/api/conversations/${conversationId}/chat`, {
         method: "POST",
         headers: { authorization: `Bearer ${await accessToken()}`, "content-type": "application/json" },
         body: JSON.stringify({ message: clean }),
-        signal: controller.signal,
       });
-      if (!response.ok || !response.body) throw new Error("START_FAILED");
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let pendingText = "";
-      let lastPaint = 0;
-      const paintText = () => {
-        if (!pendingText) return;
-        const content = pendingText;
-        pendingText = "";
-        lastPaint = performance.now();
-        updateActiveRun({ state: "streaming", status: "Writing response", content });
-      };
+      if (!response.ok || !response.body) throw new Error("AID could not start this request.");
+      const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done, value } = await reader.read(); if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+        const lines = buffer.split("\n"); buffer = lines.pop() ?? "";
         for (const line of lines) {
           if (!line.trim()) continue;
           const payload = JSON.parse(line) as { type: string; data: Record<string, unknown> };
-          if (payload.type === "user_message") {
-            setMessages((current) => current.map((message) => message.id === optimisticUserMessage.id ? payload.data as unknown as ChatMessage : message));
-          }
-          if (payload.type === "status") updateActiveRun({ state: "processing", status: String(payload.data.message ?? "Working") });
-          if (payload.type === "tool_start") {
-            const id = String(payload.data.id ?? crypto.randomUUID());
-            const name = String(payload.data.name ?? "tool");
-            setActiveRun((current) => current ? { ...current, state: "tool", status: toolLabel(name), tools: [...current.tools, { id, name, status: "running" }] } : current);
-          }
-          if (payload.type === "tool_result") {
-            const id = String(payload.data.id ?? "");
-            const status = payload.data.status === "success" ? "success" : "error";
-            setActiveRun((current) => current ? { ...current, tools: current.tools.map((tool) => tool.id === id ? { ...tool, status } : tool) } : current);
-          }
-          if (payload.type === "approval") updateActiveRun({ state: "approval", status: "Waiting for your approval" });
-          if (payload.type === "text_delta") {
-            pendingText += String(payload.data.text ?? "");
-            if (performance.now() - lastPaint >= 50) paintText();
-          }
-          if (payload.type === "assistant_message") {
-            paintText();
-            setMessages((current) => [...current, payload.data as unknown as ChatMessage]);
-            setActiveRun(null);
-          }
-          if (payload.type === "error") throw new Error("REQUEST_FAILED");
+          if (payload.type === "user_message") setMessages((current) => [...current, payload.data as unknown as ChatMessage]);
+          if (payload.type === "status") setRunStatus(String(payload.data.message ?? "Working…"));
+          if (payload.type === "tool_start") setRunStatus(`Using ${String(payload.data.name ?? "tool").replaceAll("_", " ")}…`);
+          if (payload.type === "approval") setNotice("AID prepared an action. Review the approval card before it executes.");
+          if (payload.type === "assistant_message") setMessages((current) => [...current, payload.data as unknown as ChatMessage]);
+          if (payload.type === "error") throw new Error(String(payload.data.message ?? "AID request failed").replaceAll("_", " "));
         }
       }
-      paintText();
-      const threads = await api<{ conversations: Conversation[] }>("/api/conversations", "GET");
-      setConversations(threads.conversations);
-    } catch (error) {
-      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
-        updateActiveRun({ state: "cancelled", status: "Stopped by you" });
-      } else {
-        updateActiveRun({ state: "error", status: "AID could not complete this request" });
-        setDraft(clean);
-      }
-    } finally {
-      if (activeRequestRef.current === controller) activeRequestRef.current = null;
-      setBusy(null);
-    }
-  }
-
-  function stopMessage() {
-    activeRequestRef.current?.abort();
-  }
-
-  function retryActiveRun() {
-    const request = activeRun?.request;
-    setActiveRun(null);
-    if (request) void sendMessage(request);
+      const threads = await api<{ conversations: Conversation[] }>("/api/conversations", "GET"); setConversations(threads.conversations);
+    } catch (error) { setNotice(error instanceof Error ? error.message : "AID request failed."); setDraft(clean); }
+    finally { setBusy(null); setRunStatus(""); }
   }
 
   function composerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey && !activeRequestRef.current) { event.preventDefault(); void sendMessage(); }
+    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
   }
 
   async function continueWithGoogle() {
@@ -402,11 +302,11 @@ export default function HomePage() {
           </header>
           <div className="message-scroll">
             {!messages.length && <section className="empty-chat"><div className="assistant-mark">AID</div><h1>{user ? "What should AID handle?" : "Your AI IT Department"}</h1><p>{assistantWelcome}</p><div className="starter-grid">{starters.map((starter) => <button key={starter} onClick={() => void sendMessage(starter)}>{starter}<span>→</span></button>)}</div></section>}
-            <div className="messages">{messages.map((item) => <article className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "AID" : user?.email?.slice(0, 1).toUpperCase()}</div><div className="message-content"><strong>{item.role === "assistant" ? "AID" : "You"}</strong><p>{item.content}</p>{item.role === "assistant" && <div className="message-actions"><button type="button" onClick={() => navigator.clipboard.writeText(item.content)}>Copy</button><button type="button" onClick={() => void sendMessage(item.content)}>Try again</button><button type="button" onClick={() => setDraft(`Continue from here: ${item.content}`)}>Continue from here</button></div>}</div></article>)}</div>
-            {activeRun && <article className={`message assistant response-state state-${activeRun.state}`} aria-live="polite"><div className="message-content"><strong>AID</strong>{activeRun.content ? <p>{activeRun.content}</p> : <p className="response-status">{activeRun.status}</p>}{activeRun.tools.map((tool) => <div className={`operation-card ${tool.status}`} key={tool.id}><span aria-hidden="true">{tool.status === "running" ? "…" : tool.status === "success" ? "✓" : "!"}</span>{toolLabel(tool.name)}</div>)}{activeRun.state === "approval" && <div className="approval-inline"><strong>Review and approve</strong><p>AID has prepared an action. The approval card remains available until you decide.</p></div>}{activeRun.state === "error" && <div className="recovery-panel"><strong>AID could not complete this request</strong><p>No external action was sent or changed without your approval.</p><button type="button" onClick={retryActiveRun}>Try again</button></div>}{activeRun.state === "cancelled" && <div className="recovery-panel"><strong>Stopped by you</strong><p>Your original request and any completed work are preserved.</p><button type="button" onClick={retryActiveRun}>Try again</button><button type="button" onClick={() => setDraft(`Continue: ${activeRun.request}`)}>Continue</button></div>}</div></article>}
+            <div className="messages">{messages.map((item) => <article className={`message ${item.role}`} key={item.id}><div className="avatar">{item.role === "assistant" ? "AID" : user?.email?.slice(0, 1).toUpperCase()}</div><div className="message-content"><strong>{item.role === "assistant" ? "AID" : "You"}</strong><p>{item.content}</p></div></article>)}</div>
+            {runStatus && <div className="thinking" role="status" aria-live="polite"><span></span>{runStatus}</div>}
             <div ref={bottomRef} />
           </div>
-          <div className="composer-wrap"><div className="composer"><textarea aria-label="Message AID" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKeyDown} placeholder="Message AID" rows={1} /><button aria-label={activeRequestRef.current ? "Stop response" : "Send message"} onClick={() => activeRequestRef.current ? stopMessage() : void sendMessage()} disabled={!activeRequestRef.current && !draft.trim()}>{activeRequestRef.current ? "■" : "↑"}</button></div><small>{activeRequestRef.current ? "AID is working. You can keep typing, or stop this request." : "AID reads connected data directly. External and destructive actions require your approval."}</small></div>
+          <div className="composer-wrap"><div className="composer"><textarea aria-label="Message AID" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={composerKeyDown} placeholder="Message AID" rows={1} /><button aria-label="Send message" onClick={() => void sendMessage()} disabled={!draft.trim() || busy === "chat"}>↑</button></div><small>AID reads connected data directly. External and destructive actions require your approval.</small></div>
         </> : <>
           <header className="chat-header"><div className="mobile-header-leading"><button className="mobile-back" aria-label="Back to chat" onClick={() => setView("chat")}>‹</button><div><strong>Settings & connections</strong><small>Manage the context and accounts AID can use.</small></div></div><button className="mobile-settings" onClick={() => setView("chat")}>Done</button></header>
           <div className="settings-scroll">
