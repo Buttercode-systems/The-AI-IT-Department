@@ -13,6 +13,10 @@ function event(type: string, data: unknown) {
   return encoder.encode(`${JSON.stringify({ type, data })}\n`);
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function systemPrompt(context: { organizationName: string; profile: Record<string, unknown> | null; memories: Array<Record<string, unknown>> }) {
   return `You are AID, short for AI IT Department, a practical AI business assistant working inside the user's connected workspace.
 
@@ -99,7 +103,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         runId = run.id;
 
         controller.enqueue(event("user_message", userMessage));
-        controller.enqueue(event("status", { message: "Understanding your request…", correlation_id: runtime.correlationId }));
+        controller.enqueue(event("status", { message: "Understanding your request", correlation_id: runtime.correlationId }));
 
         const history: AgentMessage[] = [
           { role: "system", content: systemPrompt({ organizationName: organization?.name ?? "Business workspace", profile: profile as Record<string, unknown> | null, memories: (memories ?? []) as Array<Record<string, unknown>> }) },
@@ -112,7 +116,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         let totalToolCalls = 0;
 
         for (let step = 0; step < MAX_TOOL_STEPS; step += 1) {
-          const assistant = await completeAgent(history);
+          if (request.signal.aborted) throw new Error("REQUEST_CANCELLED");
+          const assistant = await completeAgent(history, { signal: request.signal });
           if (assistant.tool_calls?.length) {
             if (totalToolCalls + assistant.tool_calls.length > MAX_TOOL_CALLS) throw new Error("TOOL_CALL_LIMIT_REACHED");
             totalToolCalls += assistant.tool_calls.length;
@@ -120,6 +125,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
             for (const call of assistant.tool_calls) {
               const toolName = call.function.name;
               const args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+              if (request.signal.aborted) throw new Error("REQUEST_CANCELLED");
+              const toolStartedAt = Date.now();
               controller.enqueue(event("tool_start", { id: call.id, name: toolName }));
               let result: unknown;
               try {
@@ -129,12 +136,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
                   approvalIds.push(approval.id);
                   controller.enqueue(event("approval", { id: approval.id }));
                 }
-                toolLog.push({ id: call.id, name: toolName, status: "success", approval_id: approval?.id ?? null });
+                toolLog.push({ id: call.id, name: toolName, status: "success", duration_ms: Date.now() - toolStartedAt, approval_id: approval?.id ?? null });
                 controller.enqueue(event("tool_result", { id: call.id, name: toolName, status: "success" }));
               } catch (error) {
                 const errorMessage = safeErrorCode(error);
                 result = { error: errorMessage };
-                toolLog.push({ id: call.id, name: toolName, status: "error", error: errorMessage });
+                toolLog.push({ id: call.id, name: toolName, status: "error", duration_ms: Date.now() - toolStartedAt, error: errorMessage });
                 controller.enqueue(event("tool_result", { id: call.id, name: toolName, status: "error", error: errorMessage }));
               }
               const serialized = JSON.stringify(result);
@@ -157,6 +164,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         }
 
         if (!finalText) finalText = "I reached the execution limit before completing that request. Please narrow the task or continue in a new message.";
+        controller.enqueue(event("status", { message: "Finishing the response", correlation_id: runtime.correlationId }));
+        for (let offset = 0; offset < finalText.length; offset += 120) {
+          if (request.signal.aborted) throw new Error("REQUEST_CANCELLED");
+          controller.enqueue(event("text_delta", { text: finalText.slice(offset, offset + 120) }));
+          if (offset + 120 < finalText.length) await delay(50);
+        }
         const { data: savedAssistant, error: assistantError } = await admin.from("conversation_messages").insert({
           conversation_id: conversationId,
           organization_id: organizationId,
@@ -179,12 +192,12 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
         controller.enqueue(event("assistant_message", savedAssistant));
         controller.enqueue(event("done", { run_id: runId, correlation_id: runtime.correlationId, conversation_id: conversationId, approval_ids: approvalIds }));
       } catch (error) {
-        const code = safeErrorCode(error);
+        const code = request.signal.aborted || (error instanceof Error && error.message === "REQUEST_CANCELLED") ? "REQUEST_CANCELLED" : safeErrorCode(error);
         console.error("agent_run_failed", { correlationId: runtime.correlationId, code });
         if (runId) {
           await Promise.all([
-            finishRun({ runId, correlationId: runtime.correlationId, startedAt: runtime.startedAt, status: "failed", errorCode: code }),
-            recordUsage({ organizationId, userId: user.id, eventType: "agent_run_failed", metadata: { run_id: runId, correlation_id: runtime.correlationId, error_code: code } }),
+            finishRun({ runId, correlationId: runtime.correlationId, startedAt: runtime.startedAt, status: code === "REQUEST_CANCELLED" ? "cancelled" : "failed", errorCode: code }),
+            recordUsage({ organizationId, userId: user.id, eventType: code === "REQUEST_CANCELLED" ? "agent_run_cancelled" : "agent_run_failed", metadata: { run_id: runId, correlation_id: runtime.correlationId, error_code: code } }),
           ]);
         }
         controller.enqueue(event("error", { message: code, correlation_id: runtime.correlationId }));

@@ -43,7 +43,7 @@ export async function finishRun(input: {
   runId: string | null;
   correlationId: string;
   startedAt: number;
-  status: "completed" | "awaiting_approval" | "failed";
+  status: "completed" | "awaiting_approval" | "failed" | "cancelled";
   responseText?: string | null;
   toolCalls?: Array<Record<string, unknown>>;
   errorCode?: string | null;
